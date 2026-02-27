@@ -8,7 +8,7 @@ const CONFIG = {
     API_KEY: 'AIzaSyAOhGTjJXHhuUhqf1g2DPCla59xNzftb-Q',
     SHEET_ID: '1m0rv2gcMW3E8Yrh02PnwtHgZ3utj8XRPa9kYpwwm5oo',
     FOLDER_ID: '1ig8n3pthz8esYzmAsoibPUPz1MNVg88m',
-    SCOPES: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file',
+    SCOPES: 'openid email profile https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file',
 
     SHEETS: {
         ESTUDIANTES: 'Estudiantes',
