@@ -1383,99 +1383,96 @@ async function downloadCarnetPDF() {
 
     const s = APP.lastStudent;
 
-    // Si hay URL de Drive pero aún no tenemos base64, intentar cargarla ahora
+    // Si hay URL de Drive pero aún no tenemos base64, cargarla primero
     if (!s.photo && s.photoUrl && s.photoUrl.startsWith('http')) {
         showToast('info', 'Cargando foto...', 'Descargando imagen desde Drive');
         const b64 = await loadDrivePhotoAsBase64(s.photoUrl, s.id);
         if (b64) {
-            photoCache[s.id]  = b64;
-            s.photo           = b64;
+            photoCache[s.id]      = b64;
+            s.photo               = b64;
             APP.lastStudent.photo = b64;
         }
     }
 
     showToast('info', 'Generando PDF...', 'Por favor espera un momento');
-    const doc = new (window.jspdf.jsPDF)({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+    // Proporciones exactas del carnet 3D visual (280×445px CSS → ratio 0.629)
+    const cw = 63;                          // mm — ancho de cada carnet
+    const ch = Math.round(cw * 445 / 280);  // mm — alto proporcional ≈ 100mm
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pw  = doc.internal.pageSize.getWidth();   // 210mm
     const ph  = doc.internal.pageSize.getHeight();  // 297mm
 
-    // Dimensiones carnet en mm (tarjeta CR80: 85.6 × 54mm)
-    const cw = 85.6, ch = 54;
-    const cx = (pw - cw) / 2;
-
-    // Fondo página
-    doc.setFillColor(15, 20, 28);
+    // Fondo oscuro
+    doc.setFillColor(12, 18, 26);
     doc.rect(0, 0, pw, ph, 'F');
 
-    // ── Título ──
+    // Título
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(200, 169, 110);
-    doc.text('INSTITUTO CEAN — CREDENCIAL OFICIAL', pw / 2, 18, { align: 'center' });
-    doc.setFontSize(7);
-    doc.setTextColor(120, 120, 120);
-    doc.text('Sistema de Asistencia Escolar', pw / 2, 23, { align: 'center' });
-
-    // ── Renderizar FRENTE ──
-    const frontCanvas = await renderCarnetFaceToCanvas('front', s);
-    const cy1 = 30;
-    doc.addImage(frontCanvas.toDataURL('image/png'), 'PNG', cx, cy1, cw, ch);
-    // Sombra simulada
-    doc.setDrawColor(200, 169, 110, 0.3);
-    doc.setLineWidth(0.3);
-    doc.roundedRect(cx, cy1, cw, ch, 2, 2, 'S');
-
-    // Etiqueta FRENTE
-    doc.setFontSize(6.5);
-    doc.setTextColor(180, 180, 180);
-    doc.text('▲  FRENTE', cx, cy1 - 2);
-
-    // ── Renderizar REVERSO ──
-    const backCanvas = await renderCarnetFaceToCanvas('back', s);
-    const cy2 = cy1 + ch + 12;
-    doc.addImage(backCanvas.toDataURL('image/png'), 'PNG', cx, cy2, cw, ch);
-    doc.setDrawColor(180, 180, 180, 0.2);
-    doc.setLineWidth(0.3);
-    doc.roundedRect(cx, cy2, cw, ch, 2, 2, 'S');
-
-    // Etiqueta REVERSO
-    doc.setFontSize(6.5);
-    doc.setTextColor(180, 180, 180);
-    doc.text('▲  REVERSO', cx, cy2 - 2);
-
-    // ── Datos del alumno al pie ──
-    const dataY = cy2 + ch + 16;
-    doc.setFillColor(27, 58, 45, 0.5);
-    doc.roundedRect(cx, dataY, cw, 28, 2, 2, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.setTextColor(200, 169, 110);
-    doc.text(s.name || '—', cx + cw / 2, dataY + 7, { align: 'center' });
+    doc.text('INSTITUTO CEAN — CREDENCIAL OFICIAL', pw / 2, 16, { align: 'center' });
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.5);
-    doc.setTextColor(220, 220, 220);
-    doc.text(`CI: ${s.dni || '—'}`, cx + cw / 2, dataY + 13, { align: 'center' });
-    doc.text(`${s.course || '—'}`, cx + cw / 2, dataY + 18, { align: 'center' });
-    doc.text(`${s.schedule || '—'}`, cx + cw / 2, dataY + 23, { align: 'center' });
+    doc.setFontSize(7);
+    doc.setTextColor(90, 90, 90);
+    doc.text('Sistema de Asistencia Escolar', pw / 2, 21, { align: 'center' });
 
-    // ── Pie de página ──
+    // Centrar ambos carnets lado a lado con mismo tamaño
+    const gap    = 8;
+    const totalW = cw * 2 + gap;
+    const startX = (pw - totalW) / 2;
+    const startY = 28;
+
+    // Renderizar FRENTE y REVERSO — mismo canvas size, mismo tamaño en PDF
+    const frontCanvas = await renderCarnetFaceToCanvas('front', s);
+    const backCanvas  = await renderCarnetFaceToCanvas('back',  s);
+
+    doc.addImage(frontCanvas.toDataURL('image/png'), 'PNG', startX,          startY, cw, ch);
+    doc.addImage(backCanvas.toDataURL('image/png'),  'PNG', startX + cw + gap, startY, cw, ch);
+
+    // Etiquetas
     doc.setFontSize(6);
-    doc.setTextColor(80, 80, 80);
-    doc.text(`Emitido: ${new Date().toLocaleDateString('es-BO')} · ID: ${s.id}`, pw / 2, ph - 10, { align: 'center' });
-    doc.text('institutocean.edu.bo', pw / 2, ph - 6, { align: 'center' });
+    doc.setTextColor(150, 150, 150);
+    doc.text('FRENTE',  startX + cw / 2,           startY + ch + 4, { align: 'center' });
+    doc.text('REVERSO', startX + cw + gap + cw / 2, startY + ch + 4, { align: 'center' });
 
-    doc.save(`Carnet_${s.name?.replace(/\s+/g,'_') || s.dni}.pdf`);
+    // Separador
+    const lineY = startY + ch + 10;
+    doc.setDrawColor(200, 169, 110);
+    doc.setLineWidth(0.25);
+    doc.line(startX, lineY, startX + totalW, lineY);
+
+    // Datos del alumno
+    const dataY = lineY + 7;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(200, 169, 110);
+    doc.text(s.name || '—', pw / 2, dataY, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(170, 170, 170);
+    doc.text(`CI: ${s.dni || '—'}  ·  ${s.course || '—'}`, pw / 2, dataY + 6, { align: 'center' });
+    if (s.schedule) doc.text(s.schedule, pw / 2, dataY + 11, { align: 'center' });
+
+    // Pie
+    doc.setFontSize(5.5);
+    doc.setTextColor(55, 55, 55);
+    doc.text(`Emitido: ${new Date().toLocaleDateString('es-BO')}  ·  ID: ${s.id}`, pw / 2, ph - 8, { align: 'center' });
+    doc.text('institutocean.edu.bo', pw / 2, ph - 4, { align: 'center' });
+
+    doc.save(`Carnet_${(s.name || s.dni).replace(/\s+/g, '_')}.pdf`);
     showToast('ok', 'PDF generado', `Carnet de ${s.name}`);
 }
 
-// Renderiza una cara del carnet a canvas de alta resolución
+// Renderiza una cara del carnet — mismo canvas 280×445 (ratio del carnet 3D)
 async function renderCarnetFaceToCanvas(face, student) {
-    // Escala para alta resolución (2x)
-    const SCALE = 3;
-    const W = Math.round(322 * SCALE);  // 85.6mm a 96dpi ×3
-    const H = Math.round(204 * SCALE);  // 54mm a 96dpi ×3
+    const SCALE = 4;
+    const W = 280 * SCALE;
+    const H = 445 * SCALE;
     const c   = document.createElement('canvas');
-    c.width   = W; c.height = H;
+    c.width = W; c.height = H;
     const ctx = c.getContext('2d');
     const s   = SCALE;
 
@@ -1487,277 +1484,303 @@ async function renderCarnetFaceToCanvas(face, student) {
     return c;
 }
 
-async function drawCarnetFront(ctx, W, H, s, student) {
+async function drawCarnetFront(ctx, W, H, sc, student) {
+    // W=1120 H=1780 (280×445 × scale=4)
     const forest = '#1b3a2d', gold = '#c8a96e', goldL = '#e0c48a', white = '#ffffff';
+    const r = n => Math.round(n * sc);
 
-    // Fondo
+    // Fondo verde bosque
     const bg = ctx.createLinearGradient(0, 0, W, H);
     bg.addColorStop(0, '#0f2a1e'); bg.addColorStop(1, forest);
     ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
 
-    // Brillo esquina
-    const gl = ctx.createRadialGradient(W * .8, H * .1, 0, W * .8, H * .1, W * .4);
-    gl.addColorStop(0, 'rgba(200,169,110,.08)'); gl.addColorStop(1, 'transparent');
+    // Brillo radial esquina superior derecha
+    const gl = ctx.createRadialGradient(W*.85, H*.08, 0, W*.85, H*.08, W*.55);
+    gl.addColorStop(0, 'rgba(200,169,110,.09)'); gl.addColorStop(1, 'transparent');
     ctx.fillStyle = gl; ctx.fillRect(0, 0, W, H);
+    const gl2 = ctx.createRadialGradient(W*.1, H*.92, 0, W*.1, H*.92, W*.45);
+    gl2.addColorStop(0, 'rgba(200,169,110,.05)'); gl2.addColorStop(1, 'transparent');
+    ctx.fillStyle = gl2; ctx.fillRect(0, 0, W, H);
 
-    // Header strip
-    const hH = H * .28;
+    // ── HEADER ──
+    const hH = r(72);
     const hg = ctx.createLinearGradient(0, 0, W, 0);
     hg.addColorStop(0, '#0a1f16'); hg.addColorStop(1, '#163022');
     ctx.fillStyle = hg; ctx.fillRect(0, 0, W, hH);
-    ctx.fillStyle = 'rgba(200,169,110,.22)';
-    ctx.fillRect(0, hH - 1 * s, W, 1 * s);
+    ctx.fillStyle = 'rgba(200,169,110,.2)'; ctx.fillRect(0, hH - r(1), W, r(1));
 
-    // Logo icono
-    const lx = 14 * s, ly = 7 * s, ls = 22 * s, lr = 5 * s;
+    // Logo cuadrado dorado
+    const lx = r(18), ly = r(16), ls = r(38), lr = r(7);
     roundRectPath(ctx, lx, ly, ls, ls, lr);
     ctx.fillStyle = gold; ctx.fill();
-    // Ícono graduación simplificado
-    ctx.strokeStyle = forest; ctx.lineWidth = 1.4 * s; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(lx + ls*.1, ly + ls*.5); ctx.lineTo(lx + ls*.5, ly + ls*.28); ctx.lineTo(lx + ls*.9, ly + ls*.5); ctx.lineTo(lx + ls*.5, ly + ls*.72); ctx.closePath(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(lx + ls*.28, ly + ls*.55); ctx.lineTo(lx + ls*.28, ly + ls*.8); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(lx + ls*.72, ly + ls*.55); ctx.lineTo(lx + ls*.72, ly + ls*.8); ctx.stroke();
+    // Ícono graduación
+    ctx.strokeStyle = forest; ctx.lineWidth = r(2); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const lc = lx + ls/2, lt = ly + ls*.28, lb = ly + ls*.72, ll = lx + ls*.15, lright = lx + ls*.85;
+    ctx.beginPath(); ctx.moveTo(ll, ly+ls*.5); ctx.lineTo(lc, lt); ctx.lineTo(lright, ly+ls*.5); ctx.lineTo(lc, lb); ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx+ls*.3, ly+ls*.54); ctx.lineTo(lx+ls*.3, ly+ls*.78); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx+ls*.7, ly+ls*.54); ctx.lineTo(lx+ls*.7, ly+ls*.78); ctx.stroke();
 
-    // Org name
-    ctx.fillStyle = white;
-    ctx.font = `bold ${8 * s}px 'Georgia', serif`;
-    ctx.textBaseline = 'top';
-    ctx.fillText('Instituto CEAN', (lx + ls + 7 * s), ly + 2 * s);
+    // Nombre organización
+    ctx.fillStyle = white; ctx.textBaseline = 'top';
+    ctx.font = `bold ${r(14)}px Georgia, serif`;
+    ctx.fillText('Instituto CEAN', lx + ls + r(10), ly + r(4));
     ctx.fillStyle = gold;
-    ctx.font = `${5.5 * s}px Arial, sans-serif`;
-    ctx.fillText('SISTEMA DE ASISTENCIA', (lx + ls + 7 * s), ly + 13 * s);
+    ctx.font = `500 ${r(8)}px Arial, sans-serif`;
+    ctx.letterSpacing = `${r(1.5)}px`;
+    ctx.fillText('SISTEMA DE ASISTENCIA', lx + ls + r(10), ly + r(22));
+    ctx.letterSpacing = '0px';
 
-    // Foto
-    const px = 14 * s, py = hH + 8 * s, pw = 54 * s, ph = 68 * s, pr = 7 * s;
-    // Marco dorado
-    const gBorder = ctx.createLinearGradient(px - 2*s, py - 2*s, px + pw + 2*s, py + ph + 2*s);
-    gBorder.addColorStop(0, gold); gBorder.addColorStop(.5, goldL); gBorder.addColorStop(1, gold);
-    ctx.fillStyle = gBorder;
-    roundRectPath(ctx, px - 2.5*s, py - 2.5*s, pw + 5*s, ph + 5*s, pr + 2*s);
+    // ── FOTO ── centrada, grande
+    const pw2 = r(160), ph2 = r(200), px2 = (W - pw2)/2, py2 = hH + r(22), pr2 = r(10);
+    // Marco dorado degradado
+    const gb = ctx.createLinearGradient(px2, py2, px2+pw2, py2+ph2);
+    gb.addColorStop(0, gold); gb.addColorStop(.5, goldL); gb.addColorStop(1, gold);
+    ctx.fillStyle = gb;
+    roundRectPath(ctx, px2 - r(3), py2 - r(3), pw2 + r(6), ph2 + r(6), pr2 + r(3));
     ctx.fill();
 
-    // Área foto
     ctx.save();
-    roundRectPath(ctx, px, py, pw, ph, pr);
+    roundRectPath(ctx, px2, py2, pw2, ph2, pr2);
     ctx.clip();
-    ctx.fillStyle = '#1f4535'; ctx.fillRect(px, py, pw, ph);
+    ctx.fillStyle = '#1f4535'; ctx.fillRect(px2, py2, pw2, ph2);
 
     if (student.photo) {
         try {
-            await new Promise((res, rej) => {
+            await new Promise((res) => {
                 const img = new Image();
                 img.crossOrigin = 'anonymous';
-                img.onload  = () => { ctx.drawImage(img, px, py, pw, ph); res(); };
-                img.onerror = () => res(); // fallback a placeholder
+                img.onload  = () => { ctx.drawImage(img, px2, py2, pw2, ph2); res(); };
+                img.onerror = () => res();
                 img.src = student.photo;
             });
         } catch(e) {}
     } else {
-        // Placeholder iniciales
-        const ini = (student.name || '?').split(' ').map(w => w[0] || '').join('').substring(0, 2).toUpperCase();
+        // Iniciales placeholder
+        const ini = (student.name||'?').split(' ').map(w=>w[0]||'').join('').substring(0,2).toUpperCase();
         ctx.fillStyle = 'rgba(200,169,110,.4)';
-        ctx.font = `bold ${22 * s}px Georgia, serif`;
+        ctx.font = `bold ${r(60)}px Georgia, serif`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(ini, px + pw / 2, py + ph / 2);
+        ctx.fillText(ini, px2 + pw2/2, py2 + ph2/2);
         ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     }
     ctx.restore();
 
     // Badge estrella
-    const bx = px + pw - 8 * s, by = py + ph - 2 * s, bs = 14 * s, br2 = 4 * s;
-    roundRectPath(ctx, bx, by, bs, bs, br2);
+    const bx = px2 + pw2 - r(2), by = py2 + ph2 - r(2), bs = r(28), br3 = r(6);
+    roundRectPath(ctx, bx, by, bs, bs, br3);
     ctx.fillStyle = gold; ctx.fill();
     ctx.fillStyle = forest;
-    ctx.font = `bold ${8 * s}px Arial`;
+    ctx.font = `bold ${r(16)}px Arial`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('★', bx + bs / 2, by + bs / 2);
+    ctx.fillText('★', bx + bs/2, by + bs/2);
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 
-    // Datos a la derecha de la foto
-    const dx = px + pw + 12 * s, dw = W - dx - 10 * s;
-    const nameFull = (student.name || '—').toUpperCase();
+    // ── BLOQUE NOMBRE ──
+    const ny = py2 + ph2 + r(22);
+    ctx.textAlign = 'center';
 
-    // Rol
+    // ROL
     ctx.fillStyle = gold;
-    ctx.font = `600 ${5.5 * s}px Arial, sans-serif`;
-    ctx.letterSpacing = `${2 * s}px`;
-    ctx.fillText('ESTUDIANTE', dx, hH + 16 * s);
+    ctx.font = `600 ${r(9)}px Arial`;
+    ctx.letterSpacing = `${r(3)}px`;
+    ctx.fillText('ESTUDIANTE', W/2, ny);
     ctx.letterSpacing = '0px';
 
-    // Nombre
+    // NOMBRE
+    const nameFull = (student.name || '—');
     ctx.fillStyle = white;
-    let nfs = 12 * s;
-    ctx.font = `bold ${nfs}px 'Georgia', serif`;
-    while (ctx.measureText(nameFull).width > dw && nfs > 6 * s) {
-        nfs -= 0.5 * s; ctx.font = `bold ${nfs}px 'Georgia', serif`;
+    let nfs = r(26);
+    ctx.font = `bold ${nfs}px Georgia, serif`;
+    while (ctx.measureText(nameFull).width > W - r(40) && nfs > r(16)) {
+        nfs -= r(.5); ctx.font = `bold ${nfs}px Georgia, serif`;
     }
-    // Split si es muy largo
-    if (ctx.measureText(nameFull).width > dw) {
-        const parts = nameFull.split(' ');
-        const half  = Math.ceil(parts.length / 2);
-        ctx.font = `bold ${9 * s}px 'Georgia', serif`;
-        ctx.fillText(parts.slice(0, half).join(' '), dx, hH + 27 * s);
-        ctx.fillText(parts.slice(half).join(' '),    dx, hH + 38 * s);
+    if (ctx.measureText(nameFull).width > W - r(40)) {
+        const parts = nameFull.split(' '), half = Math.ceil(parts.length/2);
+        ctx.font = `bold ${r(20)}px Georgia, serif`;
+        ctx.fillText(parts.slice(0,half).join(' '), W/2, ny + r(22));
+        ctx.fillText(parts.slice(half).join(' '),   W/2, ny + r(44));
     } else {
-        ctx.fillText(nameFull, dx, hH + 30 * s);
+        ctx.fillText(nameFull, W/2, ny + r(26));
     }
 
-    // Curso
+    // CURSO
     ctx.fillStyle = 'rgba(255,255,255,.42)';
-    ctx.font = `${6.5 * s}px Arial, sans-serif`;
-    ctx.fillText((student.course || '—').substring(0, 24), dx, hH + 44 * s);
+    ctx.font = `${r(11)}px Arial`;
+    ctx.fillText(student.course || '—', W/2, ny + r(52));
 
-    // Separador
-    ctx.fillStyle = 'rgba(200,169,110,.25)';
-    ctx.fillRect(dx, hH + 48 * s, dw, 1 * s);
+    // ── SEPARADOR ──
+    const divY = ny + r(64);
+    const dg = ctx.createLinearGradient(0, divY, W, divY);
+    dg.addColorStop(0,'transparent'); dg.addColorStop(.5,'rgba(200,169,110,.35)'); dg.addColorStop(1,'transparent');
+    ctx.fillStyle = dg; ctx.fillRect(r(20), divY, W - r(40), r(1));
 
-    // CI
-    ctx.fillStyle = 'rgba(200,169,110,.55)';
-    ctx.font = `500 ${4.5 * s}px Arial, sans-serif`;
-    ctx.letterSpacing = `${1.5 * s}px`;
-    ctx.fillText('CI', dx, hH + 57 * s);
-    ctx.letterSpacing = '0px';
-    ctx.fillStyle = white;
-    ctx.font = `500 ${8 * s}px 'Courier New', monospace`;
-    ctx.fillText(student.dni || '—', dx, hH + 66 * s);
+    // ── INFO GRID ── (CI | Gestión)  (Horario full width)
+    const gy = divY + r(18);
+    const col = W/2;
 
-    // Año
-    ctx.fillStyle = 'rgba(200,169,110,.55)';
-    ctx.font = `500 ${4.5 * s}px Arial, sans-serif`;
-    ctx.letterSpacing = `${1.5 * s}px`;
-    ctx.fillText('GESTIÓN', dx + dw * .5, hH + 57 * s);
-    ctx.letterSpacing = '0px';
-    ctx.fillStyle = white;
-    ctx.font = `500 ${8 * s}px 'Courier New', monospace`;
-    ctx.fillText(String(new Date().getFullYear()), dx + dw * .5, hH + 66 * s);
+    function infoCell(label, value, x, y, maxW) {
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(200,169,110,.58)';
+        ctx.font = `600 ${r(8)}px Arial`;
+        ctx.letterSpacing = `${r(2)}px`;
+        ctx.fillText(label.toUpperCase(), x, y);
+        ctx.letterSpacing = '0px';
+        ctx.fillStyle = 'rgba(200,169,110,.2)'; ctx.fillRect(x, y + r(3), maxW, r(1));
+        ctx.fillStyle = white;
+        ctx.font = `500 ${r(13)}px 'Courier New', monospace`;
+        // Truncar si no cabe
+        let val = value;
+        while (ctx.measureText(val).width > maxW && val.length > 3) val = val.slice(0,-1) + '…';
+        ctx.fillText(val, x, y + r(18));
+    }
 
-    // Footer
-    const fy = H - 13 * s;
-    const fg = ctx.createLinearGradient(0, fy, W, fy);
-    fg.addColorStop(0, 'rgba(200,169,110,.1)'); fg.addColorStop(1, 'rgba(200,169,110,.04)');
-    ctx.fillStyle = fg; ctx.fillRect(0, fy, W, 13 * s);
-    ctx.fillStyle = 'rgba(200,169,110,.18)'; ctx.fillRect(0, fy, W, 0.8 * s);
+    infoCell('Carnet de Identidad', student.dni || '—', r(20), gy, col - r(30));
+    infoCell('Gestión', String(new Date().getFullYear()), col + r(10), gy, col - r(30));
 
-    ctx.fillStyle = 'rgba(255,255,255,.28)';
-    ctx.font = `${5 * s}px Arial, sans-serif`;
+    const gy2 = gy + r(34);
+    // Horario completo (full width)
     ctx.textAlign = 'left';
-    ctx.fillText('institutocean.edu.bo', 14 * s, fy + 9 * s);
+    ctx.fillStyle = 'rgba(200,169,110,.58)';
+    ctx.font = `600 ${r(8)}px Arial`;
+    ctx.letterSpacing = `${r(2)}px`;
+    ctx.fillText('HORARIO', r(20), gy2);
+    ctx.letterSpacing = '0px';
+    ctx.fillStyle = 'rgba(200,169,110,.2)'; ctx.fillRect(r(20), gy2 + r(3), W - r(40), r(1));
+    ctx.fillStyle = white;
+    ctx.font = `${r(11)}px Arial`;
+    let sched = student.schedule || '—';
+    while (ctx.measureText(sched).width > W - r(40) && sched.length > 3) sched = sched.slice(0,-1) + '…';
+    ctx.fillText(sched, r(20), gy2 + r(18));
 
-    // Pill "Vigente"
-    const vw = 42 * s, vx = W - vw - 10 * s, vy = fy + 4 * s, vh = 8 * s;
-    roundRectPath(ctx, vx, vy, vw, vh, 4 * s);
+    // ── FOOTER ──
+    const fy = H - r(26);
+    const fg = ctx.createLinearGradient(0, fy, W, fy);
+    fg.addColorStop(0,'rgba(200,169,110,.12)'); fg.addColorStop(1,'rgba(200,169,110,.04)');
+    ctx.fillStyle = fg; ctx.fillRect(0, fy, W, r(26));
+    ctx.fillStyle = 'rgba(200,169,110,.18)'; ctx.fillRect(0, fy, W, r(1));
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,.28)';
+    ctx.font = `${r(8)}px Arial`;
+    ctx.fillText('institutocean.edu.bo', r(18), fy + r(16));
+
+    // Pill Vigente
+    const vw = r(72), vx = W - vw - r(16), vy = fy + r(8), vh = r(12);
+    roundRectPath(ctx, vx, vy, vw, vh, r(6));
     ctx.fillStyle = 'rgba(46,122,86,.45)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(46,122,86,.7)'; ctx.lineWidth = 0.8 * s; ctx.stroke();
+    ctx.strokeStyle = 'rgba(46,122,86,.7)'; ctx.lineWidth = r(1); ctx.stroke();
     ctx.fillStyle = '#7ed4a3';
-    ctx.font = `bold ${4.5 * s}px Arial`;
+    ctx.font = `bold ${r(7)}px Arial`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('● VIGENTE', vx + vw / 2, vy + vh / 2);
+    ctx.fillText('● VIGENTE', vx + vw/2, vy + vh/2);
 
     // Corner marks
-    const cm = 9 * s, co = 8 * s;
-    ctx.strokeStyle = 'rgba(200,169,110,.28)'; ctx.lineWidth = 1.2 * s; ctx.lineCap = 'square';
-    [[co, co, 1, 0, 0, 1], [W-co, co, -1, 0, 0, 1], [co, H-co, 1, 0, 0, -1], [W-co, H-co, -1, 0, 0, -1]].forEach(([x, y, sx, sy, ex, ey]) => {
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + cm * sx, y); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + cm * ey); ctx.stroke();
+    const cm = r(14), co = r(12);
+    ctx.strokeStyle = 'rgba(200,169,110,.25)'; ctx.lineWidth = r(1.5); ctx.lineCap = 'square';
+    [[co,co,1,1],[W-co,co,-1,1],[co,H-co,1,-1],[W-co,H-co,-1,-1]].forEach(([x,y,sx,sy])=>{
+        ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+cm*sx,y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x,y+cm*sy); ctx.stroke();
     });
+
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 }
 
-async function drawCarnetBack(ctx, W, H, s, student) {
+async function drawCarnetBack(ctx, W, H, sc, student) {
     const forest = '#1b3a2d', cream = '#f5f0e8', creamDk = '#e8e0d0', gold = '#c8a96e', ink = '#1a1a1a';
+    const r = n => Math.round(n * sc);
 
     // Fondo crema
     ctx.fillStyle = cream; ctx.fillRect(0, 0, W, H);
 
-    // Textura puntos
+    // Textura puntos dorados
     ctx.fillStyle = 'rgba(200,169,110,.045)';
-    for (let x = 15 * s; x < W; x += 20 * s)
-        for (let y = 15 * s; y < H; y += 20 * s)
-            { ctx.beginPath(); ctx.arc(x, y, 0.8 * s, 0, Math.PI * 2); ctx.fill(); }
+    for (let x = r(20); x < W; x += r(20))
+        for (let y = r(20); y < H; y += r(20))
+            { ctx.beginPath(); ctx.arc(x, y, r(1), 0, Math.PI*2); ctx.fill(); }
 
-    // Barra top degradada
+    // Barra top degradada verde
     const bg = ctx.createLinearGradient(0, 0, W, 0);
     bg.addColorStop(0, forest); bg.addColorStop(.5, '#2e7a56'); bg.addColorStop(1, forest);
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, 5 * s);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, r(8));
 
     // Nombre organización
-    ctx.textAlign = 'center';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillStyle = forest;
-    ctx.font = `bold ${10 * s}px 'Georgia', serif`;
-    ctx.textBaseline = 'top';
-    ctx.fillText('Instituto CEAN', W / 2, 9 * s);
+    ctx.font = `bold ${r(18)}px Georgia, serif`;
+    ctx.fillText('Instituto CEAN', W/2, r(16));
     ctx.fillStyle = '#245c41';
-    ctx.font = `600 ${5 * s}px Arial`;
-    ctx.letterSpacing = `${1.5 * s}px`;
-    ctx.fillText('CARNET DE IDENTIFICACIÓN OFICIAL', W / 2, 21 * s);
+    ctx.font = `600 ${r(9)}px Arial`;
+    ctx.letterSpacing = `${r(2)}px`;
+    ctx.fillText('CARNET DE IDENTIFICACIÓN OFICIAL', W/2, r(38));
     ctx.letterSpacing = '0px';
 
     // Línea separadora
-    ctx.fillStyle = creamDk; ctx.fillRect(14 * s, 28 * s, W - 28 * s, 1 * s);
+    ctx.fillStyle = creamDk; ctx.fillRect(r(20), r(56), W - r(40), r(1));
 
-    // CI en caja
-    const bx = W / 2 - 44 * s, bw = 88 * s, by = 32 * s, bh = 22 * s;
-    ctx.fillStyle = 'rgba(200,169,110,.08)';
-    roundRectPath(ctx, bx, by, bw, bh, 4 * s); ctx.fill();
-    ctx.strokeStyle = creamDk; ctx.lineWidth = 0.8 * s;
-    roundRectPath(ctx, bx, by, bw, bh, 4 * s); ctx.stroke();
+    // Caja CI
+    const bw = r(200), bh = r(44), bx2 = (W - bw)/2, by2 = r(66);
+    roundRectPath(ctx, bx2, by2, bw, bh, r(8));
+    ctx.fillStyle = 'rgba(200,169,110,.1)'; ctx.fill();
+    ctx.strokeStyle = creamDk; ctx.lineWidth = r(1);
+    roundRectPath(ctx, bx2, by2, bw, bh, r(8)); ctx.stroke();
 
     ctx.fillStyle = '#245c41';
-    ctx.font = `600 ${5 * s}px Arial`;
-    ctx.letterSpacing = `${2 * s}px`;
-    ctx.fillText('CARNET DE IDENTIDAD', W / 2, by + 6 * s);
+    ctx.font = `600 ${r(8)}px Arial`;
+    ctx.letterSpacing = `${r(2.5)}px`;
+    ctx.fillText('CARNET DE IDENTIDAD', W/2, by2 + r(10));
     ctx.letterSpacing = '0px';
     ctx.fillStyle = ink;
-    ctx.font = `500 ${9 * s}px 'Courier New', monospace`;
-    ctx.letterSpacing = `${2 * s}px`;
-    ctx.fillText(student.dni || '—', W / 2, by + 17 * s);
+    ctx.font = `500 ${r(18)}px 'Courier New', monospace`;
+    ctx.letterSpacing = `${r(3)}px`;
+    ctx.fillText(student.dni || '—', W/2, by2 + r(32));
     ctx.letterSpacing = '0px';
 
-    // QR
-    const qrS = 62 * s, qrX = W / 2 - qrS / 2, qrY = 57 * s;
-    // Marco QR blanco
-    const qrPad = 5 * s;
-    roundRectPath(ctx, qrX - qrPad, qrY - qrPad, qrS + qrPad * 2, qrS + qrPad * 2, 6 * s);
+    // QR — grande y centrado
+    const qrS = r(180), qrPad = r(10), qrX = (W - qrS)/2, qrY = r(130);
+    roundRectPath(ctx, qrX - qrPad, qrY - qrPad, qrS + qrPad*2, qrS + qrPad*2, r(10));
     ctx.fillStyle = '#fff'; ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,.07)'; ctx.lineWidth = 0.8 * s;
-    roundRectPath(ctx, qrX - qrPad, qrY - qrPad, qrS + qrPad * 2, qrS + qrPad * 2, 6 * s); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,.08)'; ctx.lineWidth = r(1.2);
+    roundRectPath(ctx, qrX - qrPad, qrY - qrPad, qrS + qrPad*2, qrS + qrPad*2, r(10)); ctx.stroke();
 
-    // Dibujar QR real desde el DOM
     const qrCanvas = document.querySelector('#cnQrCode canvas');
     if (qrCanvas) {
         ctx.drawImage(qrCanvas, qrX, qrY, qrS, qrS);
     } else {
-        // Fallback: QR placeholder
-        ctx.fillStyle = '#eee'; ctx.fillRect(qrX, qrY, qrS, qrS);
-        ctx.fillStyle = '#999'; ctx.font = `${6 * s}px Arial`;
-        ctx.fillText('QR', qrX + qrS/2, qrY + qrS/2);
+        ctx.fillStyle = '#ccc'; ctx.fillRect(qrX, qrY, qrS, qrS);
     }
 
-    // Caption
+    // Caption QR
     ctx.fillStyle = '#5a5a5a';
-    ctx.font = `500 ${4.8 * s}px Arial`;
-    ctx.letterSpacing = `${1 * s}px`;
-    ctx.fillText('ESCANEAR PARA VERIFICAR', W / 2, qrY + qrS + qrPad + 8 * s);
+    ctx.font = `500 ${r(8)}px Arial`;
+    ctx.letterSpacing = `${r(1.5)}px`;
+    ctx.fillText('ESCANEAR PARA VERIFICAR ASISTENCIA', W/2, qrY + qrS + qrPad + r(16));
     ctx.letterSpacing = '0px';
 
-    // Línea separadora 2
-    ctx.fillStyle = creamDk; ctx.fillRect(14 * s, qrY + qrS + qrPad + 14 * s, W - 28 * s, 1 * s);
+    // Línea separadora
+    ctx.fillStyle = creamDk; ctx.fillRect(r(20), qrY + qrS + qrPad + r(24), W - r(40), r(1));
 
-    // ID sistema
-    const sidY = qrY + qrS + qrPad + 20 * s;
+    // ID Sistema
+    const sidY = qrY + qrS + qrPad + r(36);
     ctx.fillStyle = '#245c41';
-    ctx.font = `600 ${4.5 * s}px Arial`;
-    ctx.letterSpacing = `${2 * s}px`;
-    ctx.fillText('ID SISTEMA', W / 2, sidY);
+    ctx.font = `600 ${r(8)}px Arial`;
+    ctx.letterSpacing = `${r(2)}px`;
+    ctx.fillText('ID DEL SISTEMA', W/2, sidY);
     ctx.letterSpacing = '0px';
     ctx.fillStyle = '#888';
-    ctx.font = `400 ${5.5 * s}px 'Courier New', monospace`;
-    ctx.fillText((student.id || '—').substring(0, 22), W / 2, sidY + 9 * s);
+    ctx.font = `400 ${r(9)}px 'Courier New', monospace`;
+    ctx.fillText((student.id || '—').substring(0, 22), W/2, sidY + r(16));
+
+    // Nombre en pequeño
+    ctx.fillStyle = '#333';
+    ctx.font = `${r(9)}px Arial`;
+    ctx.fillText(student.name || '—', W/2, sidY + r(32));
 
     // Footer barra verde
-    ctx.fillStyle = forest; ctx.fillRect(0, H - 14 * s, W, 14 * s);
-    ctx.fillStyle = 'rgba(255,255,255,.4)';
-    ctx.font = `400 ${5 * s}px Arial`;
-    ctx.fillText('institutocean.edu.bo', W / 2, H - 5 * s);
+    ctx.fillStyle = forest; ctx.fillRect(0, H - r(28), W, r(28));
+    ctx.fillStyle = 'rgba(255,255,255,.45)';
+    ctx.font = `400 ${r(8)}px Arial`;
+    ctx.fillText('institutocean.edu.bo', W/2, H - r(10));
+
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 }
 
