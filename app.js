@@ -58,355 +58,6 @@ function watchScannerTranslations() {
     scanObserver.observe(reader, { childList: true, subtree: true, characterData: true });
 }
 
-// ─── GOOGLE AUTH ─────────────────────────────────────────────
-function onGapiLoad() {
-    gapi.load('client', async () => {
-        await gapi.client.init({
-            apiKey: CONFIG.API_KEY,
-            discoveryDocs: [
-                'https://sheets.googleapis.com/$discovery/rest?version=v4',
-                'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
-            ]
-        });
-        APP.gapiOk = true;
-        checkReady();
-    });
-}
-function onGisLoad() {
-    APP.tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: CONFIG.CLIENT_ID,
-        scope: CONFIG.SCOPES,
-        callback: ''
-    });
-    APP.gisOk = true;
-    checkReady();
-}
-function checkReady() {
-    if (APP.gapiOk && APP.gisOk) {
-        document.getElementById('authBtn').style.display = 'inline-flex';
-        loadLocal();
-        syncStatus('g', '⏳ Sin conexión');
-    }
-}
-function handleAuth() {
-    APP.tokenClient.callback = async (resp) => {
-        if (resp.error) {
-            console.error('Error OAuth:', resp);
-            showToast('bad', 'Error de conexión', 'No se pudo conectar con Google. Intenta de nuevo.');
-            return;
-        }
-
-        // Obtener el access_token directamente de la respuesta
-        const accessToken = resp.access_token || gapi.client.getToken()?.access_token;
-        if (!accessToken) {
-            showToast('bad', 'Error', 'No se obtuvo token de acceso. Intenta de nuevo.');
-            return;
-        }
-
-        // Obtener email con fetch directo — el método más confiable
-        let userEmail = null;
-        let userName  = null;
-        try {
-            const r    = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                headers: { 'Authorization': 'Bearer ' + accessToken }
-            });
-            const data = await r.json();
-            userEmail  = (data.email || '').toLowerCase().trim();
-            userName   = data.name || userEmail;
-            console.log('Email obtenido de Google:', userEmail);
-        } catch(e) {
-            console.error('Error obteniendo userinfo:', e);
-            showToast('bad', 'Error', 'No se pudo obtener tu correo de Google. Verifica tu conexión.');
-            return;
-        }
-
-        if (!userEmail) {
-            showToast('bad', 'Error', 'Google no devolvió un correo válido. Intenta de nuevo.');
-            return;
-        }
-
-        APP.authed      = true;
-        APP.currentUser = { email: userEmail, name: userName };
-
-        document.getElementById('authBtn').style.display    = 'none';
-        document.getElementById('logoutBtn').style.display  = 'inline-flex';
-        syncStatus('ok', '✅ Conectado');
-
-        // Cargar datos desde Sheets y luego verificar permisos
-        await loadFromSheets();
-        checkUserPermission();
-    };
-
-    const token = gapi.client.getToken();
-    APP.tokenClient.requestAccessToken(token === null ? { prompt: 'consent' } : { prompt: '' });
-}
-function handleSignout() {
-    const token = gapi.client.getToken();
-    if (token) { google.accounts.oauth2.revoke(token.access_token); gapi.client.setToken(''); }
-    APP.authed = false;
-    APP.currentUser = null;
-    APP.db.permisos = [];
-    document.getElementById('authBtn').style.display = 'inline-flex';
-    document.getElementById('logoutBtn').style.display = 'none';
-    document.getElementById('userBadge').style.display = 'none';
-    syncStatus('g', '⏳ Desconectado');
-    updateNavByRole(null);
-}
-
-// ─── PERMISOS / ROLES ────────────────────────────────────────
-function checkUserPermission() {
-    if (!APP.currentUser) return;
-    const email = (APP.currentUser.email || '').toLowerCase().trim();
-
-    console.log('Verificando permiso para:', email);
-    console.log('Lista de permisos en memoria:', APP.db.permisos);
-
-    const perm = APP.db.permisos.find(p =>
-        (p.email || '').toLowerCase().trim() === email
-    );
-
-    if (!perm) {
-        const lista = APP.db.permisos.length
-            ? APP.db.permisos.map(p => '"' + p.email + '"').join(', ')
-            : '(lista vacía — revisa que la hoja Permisos tenga datos desde la fila 2)';
-        console.warn(`Acceso denegado. Email: "${email}". Permisos en hoja: ${lista}`);
-        showToast('bad', 'Acceso denegado',
-            `"${email}" no está en la hoja Permisos. Revisa la consola (F12) para más detalles.`);
-        handleSignout();
-        return;
-    }
-
-    APP.currentUser.role = perm.rol;
-    const badge = document.getElementById('userBadge');
-    const avatarEl = document.getElementById('userAvatar');
-    const emailEl  = document.getElementById('userEmail');
-    const roleEl   = document.getElementById('userRole');
-
-    badge.style.display = 'flex';
-    avatarEl.textContent = (APP.currentUser.name || email)[0].toUpperCase();
-    emailEl.textContent  = APP.currentUser.name || email;
-    roleEl.textContent   = perm.rol;
-    roleEl.className     = `role-tag role-${perm.rol}`;
-
-    updateNavByRole(perm.rol);
-    showToast('ok', `Bienvenido, ${APP.currentUser.name || email}`, `Rol: ${perm.rol}`);
-}
-
-function updateNavByRole(role) {
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        if (!role) {
-            btn.style.display = 'none';
-            return;
-        }
-        const allowed = (btn.dataset.role || '').split(',');
-        btn.style.display = allowed.includes(role) ? 'flex' : 'none';
-    });
-}
-
-// ─── GESTIÓN DE PERMISOS ─────────────────────────────────────
-async function addPermiso(event) {
-    event.preventDefault();
-    const email  = document.getElementById('permEmail').value.trim().toLowerCase();
-    const nombre = document.getElementById('permNombre').value.trim();
-    const rol    = document.getElementById('permRol').value;
-
-    if (APP.db.permisos.find(p => p.email.toLowerCase() === email)) {
-        showToast('warn', 'Ya existe', `${email} ya tiene permisos registrados.`);
-        return;
-    }
-
-    const entry = { email, nombre, rol };
-    APP.db.permisos.push(entry);
-    saveLocal();
-
-    if (APP.authed) {
-        try {
-            await gapi.client.sheets.spreadsheets.values.append({
-                spreadsheetId: CONFIG.SHEET_ID,
-                range: CONFIG.SHEETS.PERMISOS,
-                valueInputOption: 'USER_ENTERED',
-                resource: { values: [[email, nombre, rol]] }
-            });
-            showToast('ok', 'Permiso agregado', `${email} — ${rol}`);
-        } catch(e) { showToast('warn', 'Guardado local', 'No se pudo sincronizar con Sheets.'); }
-    } else {
-        showToast('ok', 'Permiso guardado localmente', `${email} — ${rol}`);
-    }
-
-    document.getElementById('permForm').reset();
-    renderPermisos();
-}
-
-async function deletePermiso(email) {
-    APP.db.permisos = APP.db.permisos.filter(p => p.email.toLowerCase() !== email.toLowerCase());
-    saveLocal();
-    renderPermisos();
-    showToast('ok', 'Permiso eliminado', email);
-    // Reescribir hoja de permisos completa
-    if (APP.authed) {
-        try {
-            await gapi.client.sheets.spreadsheets.values.clear({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.PERMISOS
-            });
-            if (APP.db.permisos.length) {
-                await gapi.client.sheets.spreadsheets.values.update({
-                    spreadsheetId: CONFIG.SHEET_ID,
-                    range: 'Permisos!A2',
-                    valueInputOption: 'USER_ENTERED',
-                    resource: { values: APP.db.permisos.map(p => [p.email, p.nombre, p.rol]) }
-                });
-            }
-        } catch(e) {}
-    }
-}
-
-function renderPermisos() {
-    const tbody = document.getElementById('permisosBody');
-    if (!tbody) return;
-    if (!APP.db.permisos.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No hay permisos registrados</td></tr>';
-        return;
-    }
-    tbody.innerHTML = APP.db.permisos.map(p => `
-        <tr>
-            <td>${p.email}</td>
-            <td>${p.nombre || '—'}</td>
-            <td><span class="role-tag role-${p.rol}">${p.rol}</span></td>
-            <td>
-                <button class="btn btn-red btn-xs" onclick="deletePermiso('${p.email}')">🗑 Eliminar</button>
-            </td>
-        </tr>
-    `).join('');
-}
-
-// ─── SYNC STATUS ─────────────────────────────────────────────
-function syncStatus(type, text) {
-    const el = document.getElementById('syncChip');
-    el.className = 'chip ' + (type === 'ok' ? 'chip-ok' : type === 'err' ? 'chip-err' : 'chip-g');
-    el.textContent = text;
-}
-
-// ─── ALMACENAMIENTO LOCAL ────────────────────────────────────
-function saveLocal() { localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(APP.db)); }
-function loadLocal() {
-    const saved = localStorage.getItem(CONFIG.STORAGE_KEY);
-    if (saved) {
-        try {
-            const parsed = JSON.parse(saved);
-            // Los permisos NUNCA se restauran desde localStorage:
-            // siempre se cargan frescos desde Google Sheets al iniciar sesion.
-            APP.db.students   = parsed.students   || [];
-            APP.db.attendance = parsed.attendance || [];
-            APP.db.courses    = parsed.courses    || [];
-            APP.db.schedules  = parsed.schedules  || [];
-            APP.db.permisos   = [];
-            refreshAll();
-        } catch(e) { console.warn('Error leyendo localStorage:', e); }
-    }
-}
-
-// ─── CARGA DESDE GOOGLE SHEETS ───────────────────────────────
-async function loadFromSheets() {
-    syncStatus('g', '🔄 Cargando...');
-    try {
-        // Estudiantes (A:J — nuevo formato con email, phone, course, schedule)
-        const resStudents = await gapi.client.sheets.spreadsheets.values.get({
-            spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.ESTUDIANTES
-        });
-        if (resStudents.result.values) {
-            APP.db.students = resStudents.result.values.map(r => ({
-                id: r[0], name: r[1], dni: r[2], email: r[3] || '',
-                phone: r[4] || '', course: r[5] || '', schedule: r[6] || '',
-                photoUrl: r[7] || '', qrUrl: r[8] || '', createdAt: r[9] || '',
-                registeredBy: r[10] || ''
-            }));
-        }
-
-        // Asistencia
-        const resAtt = await gapi.client.sheets.spreadsheets.values.get({
-            spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.ASISTENCIA
-        });
-        if (resAtt.result.values) {
-            APP.db.attendance = resAtt.result.values.map(r => ({
-                sid: r[0], name: r[1], dni: r[2], course: r[3],
-                schedule: r[4], date: r[5], time: r[6], type: r[7],
-                registeredBy: r[8] || ''
-            }));
-        }
-
-        // Cursos
-        try {
-            const resCourses = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.CURSOS
-            });
-            if (resCourses.result.values) {
-                APP.db.courses = resCourses.result.values.map(r => ({
-                    id: r[0], name: r[1], grade: r[2],
-                    active: (r[3] || 'SI').toUpperCase() === 'SI',
-                    description: r[4] || ''
-                }));
-            }
-        } catch(e) {}
-
-        // Horarios
-        try {
-            const resSched = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.HORARIOS
-            });
-            if (resSched.result.values) {
-                APP.db.schedules = resSched.result.values.map(r => ({
-                    courseId: r[0], courseName: r[1], day: r[2],
-                    startTime: r[3], endTime: r[4], room: r[5] || ''
-                }));
-            }
-        } catch(e) {}
-
-        // Permisos — siempre limpiar primero y cargar frescos
-        APP.db.permisos = [];
-        try {
-            const resPerms = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.PERMISOS
-            });
-            if (resPerms.result.values) {
-                APP.db.permisos = resPerms.result.values
-                    .filter(r => r[0] && r[0].toString().trim() !== '')
-                    .map(r => ({
-                        email:  r[0].toString().trim().toLowerCase(),
-                        nombre: (r[1] || '').toString().trim(),
-                        rol:    (r[2] || CONFIG.ROLES.VIEWER).toString().trim().toUpperCase()
-                    }));
-            }
-            console.log('Permisos cargados desde Sheets:', APP.db.permisos);
-        } catch(e) {
-            console.error('Error cargando Permisos desde Sheets:', e);
-        }
-
-        saveLocal();
-        refreshAll();
-        syncStatus('ok', '✅ Sincronizado');
-    } catch(e) {
-        console.error('Error al cargar:', e);
-        syncStatus('err', '❌ Error de conexión');
-    }
-}
-
-// ─── SUBIR A DRIVE ───────────────────────────────────────────
-async function uploadToDrive(fileName, base64Data, mimeType) {
-    if (!APP.authed) return '';
-    try {
-        const rawBase64 = base64Data.split(',')[1];
-        const metadata = JSON.stringify({ name: fileName, parents: [CONFIG.FOLDER_ID], mimeType });
-        const body = `--boundary\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--boundary\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${rawBase64}\r\n--boundary--`;
-        const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-            method: 'POST',
-            headers: { Authorization: 'Bearer ' + gapi.client.getToken().access_token, 'Content-Type': 'multipart/related; boundary=boundary' },
-            body
-        });
-        const file = await res.json();
-        return file.id ? `https://drive.google.com/uc?export=view&id=${file.id}` : '';
-    } catch(e) { return ''; }
-}
-
 // ─── UTILIDADES ──────────────────────────────────────────────
 function getToday() { return new Date().toISOString().split('T')[0]; }
 function getTime()  { return new Date().toLocaleTimeString('es-BO', { hour12: false }); }
@@ -417,6 +68,7 @@ function getAvatarColor(name) {
     return colors[Math.abs(hash) % colors.length];
 }
 function getInitials(name) { return name.split(' ').map(w => w[0]).join('').substring(0,2).toUpperCase(); }
+function capitalize(str)   { return str ? str.charAt(0).toUpperCase() + str.slice(1) : str; }
 
 // ─── TOAST ───────────────────────────────────────────────────
 function showToast(type, title, message) {
@@ -429,6 +81,362 @@ function showToast(type, title, message) {
     setTimeout(() => { toast.classList.add('toast-out'); setTimeout(() => toast.remove(), 300); }, 3200);
 }
 
+// ─── PANTALLA DE LOGIN — HELPERS ─────────────────────────────
+function showLoginBtn() {
+    document.getElementById('loginLoading').style.display = 'none';
+    document.getElementById('loginBtn').style.display     = 'flex';
+    document.getElementById('loginError').style.display   = 'none';
+}
+function showLoginLoading(text) {
+    document.getElementById('loginLoading').style.display   = 'flex';
+    document.getElementById('loginLoadingText').textContent = text || 'Cargando...';
+    document.getElementById('loginBtn').style.display       = 'none';
+    document.getElementById('loginError').style.display     = 'none';
+}
+function showLoginError(msg) {
+    document.getElementById('loginLoading').style.display = 'none';
+    document.getElementById('loginBtn').style.display     = 'flex';
+    document.getElementById('loginError').style.display   = 'block';
+    document.getElementById('loginError').textContent     = msg;
+}
+function showApp() {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('appShell').style.display    = 'block';
+}
+function showLogin() {
+    document.getElementById('appShell').style.display    = 'none';
+    document.getElementById('loginScreen').style.display = 'flex';
+    showLoginBtn();
+}
+
+// ─── SYNC STATUS ─────────────────────────────────────────────
+function syncStatus(type, text) {
+    const el = document.getElementById('syncChip');
+    if (!el) return;
+    el.className    = 'chip ' + (type === 'ok' ? 'chip-ok' : type === 'err' ? 'chip-err' : 'chip-g');
+    el.textContent  = text;
+}
+
+// ─── ALMACENAMIENTO LOCAL ────────────────────────────────────
+function saveLocal() {
+    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(APP.db));
+}
+function loadLocal() {
+    try {
+        const saved = localStorage.getItem(CONFIG.STORAGE_KEY);
+        if (saved) {
+            const parsed      = JSON.parse(saved);
+            APP.db.students   = parsed.students   || [];
+            APP.db.attendance = parsed.attendance || [];
+            APP.db.courses    = parsed.courses    || [];
+            APP.db.schedules  = parsed.schedules  || [];
+            // Los permisos NUNCA se cargan del localStorage —
+            // siempre vienen frescos de Google Sheets en cada login
+            APP.db.permisos = [];
+        }
+    } catch(e) { console.warn('Error leyendo localStorage:', e); }
+}
+
+// ─── GOOGLE API — INICIALIZACIÓN ─────────────────────────────
+function onGapiLoad() {
+    gapi.load('client', async () => {
+        try {
+            await gapi.client.init({
+                apiKey:        CONFIG.API_KEY,
+                discoveryDocs: [
+                    'https://sheets.googleapis.com/$discovery/rest?version=v4',
+                    'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
+                ]
+            });
+            APP.gapiOk = true;
+            checkReady();
+        } catch(e) {
+            console.error('Error iniciando GAPI:', e);
+            showLoginError('Error al cargar la API de Google. Recarga la página.');
+        }
+    });
+}
+
+function onGisLoad() {
+    try {
+        APP.tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: CONFIG.CLIENT_ID,
+            scope:     CONFIG.SCOPES,
+            callback:  '' // se asigna en handleAuth()
+        });
+        APP.gisOk = true;
+        checkReady();
+    } catch(e) {
+        console.error('Error iniciando GIS:', e);
+        showLoginError('Error al cargar el sistema de login de Google. Recarga la página.');
+    }
+}
+
+function checkReady() {
+    if (APP.gapiOk && APP.gisOk) {
+        showLoginBtn();
+    }
+}
+
+// ─── AUTENTICACIÓN ───────────────────────────────────────────
+function handleAuth() {
+    showLoginLoading('Conectando con Google...');
+
+    APP.tokenClient.callback = async (resp) => {
+        if (resp.error) {
+            console.error('Error OAuth:', resp);
+            showLoginError('Error al conectar con Google. Intenta de nuevo.');
+            return;
+        }
+
+        showLoginLoading('Obteniendo datos de usuario...');
+
+        // Obtener email con fetch directo usando el access_token
+        const accessToken = resp.access_token;
+        let userEmail = null;
+        let userName  = null;
+
+        try {
+            const r   = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { 'Authorization': 'Bearer ' + accessToken }
+            });
+            const data = await r.json();
+            userEmail  = (data.email || '').toLowerCase().trim();
+            userName   = (data.name  || userEmail).trim();
+        } catch(e) {
+            console.error('Error obteniendo userinfo:', e);
+            showLoginError('No se pudo obtener tu correo de Google. Verifica tu conexión.');
+            return;
+        }
+
+        if (!userEmail) {
+            showLoginError('Google no devolvió un correo válido. Intenta de nuevo.');
+            return;
+        }
+
+        console.log('Email autenticado:', userEmail);
+        showLoginLoading('Cargando permisos desde la hoja de cálculo...');
+
+        // Cargar permisos desde Sheets ANTES de verificar acceso
+        const permisosOk = await cargarPermisos(accessToken);
+        if (!permisosOk) {
+            showLoginError('No se pudo leer la hoja de Permisos. Verifica que el ID de hoja sea correcto y que la API esté habilitada.');
+            return;
+        }
+
+        // Verificar si el correo tiene permiso
+        const perm = APP.db.permisos.find(p =>
+            (p.email || '').toLowerCase().trim() === userEmail
+        );
+
+        if (!perm) {
+            const lista = APP.db.permisos.length
+                ? 'Correos autorizados: ' + APP.db.permisos.map(p => p.email).join(', ')
+                : 'La hoja Permisos está vacía o no se encontraron datos desde la fila 2.';
+            console.warn('Acceso denegado para:', userEmail, '|', lista);
+            showLoginError(`"${userEmail}" no tiene permisos. Contacta al administrador.`);
+            // Revocar token para que pueda intentar con otra cuenta
+            google.accounts.oauth2.revoke(accessToken);
+            gapi.client.setToken('');
+            return;
+        }
+
+        // ✅ Login exitoso
+        APP.authed      = true;
+        APP.currentUser = { email: userEmail, name: userName, role: perm.rol };
+
+        showLoginLoading('Cargando datos...');
+        await loadFromSheets();
+
+        // Mostrar app y configurar UI
+        showApp();
+        configurarUI(perm);
+        populateCourseFilters();
+        refreshAll();
+
+        showToast('ok', `Bienvenido, ${userName}`, `Rol: ${perm.rol}`);
+    };
+
+    APP.tokenClient.requestAccessToken({ prompt: 'select_account' });
+}
+
+// Carga SOLO los permisos desde Sheets (para verificar antes de mostrar la app)
+async function cargarPermisos(accessToken) {
+    try {
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(CONFIG.RANGES.PERMISOS)}`;
+        const r   = await fetch(url, {
+            headers: { 'Authorization': 'Bearer ' + accessToken }
+        });
+        if (!r.ok) {
+            console.error('Error HTTP al cargar Permisos:', r.status, await r.text());
+            return false;
+        }
+        const data = await r.json();
+        APP.db.permisos = (data.values || [])
+            .filter(row => row[0] && row[0].toString().trim() !== '')
+            .map(row => ({
+                email:  row[0].toString().trim().toLowerCase(),
+                nombre: (row[1] || '').toString().trim(),
+                rol:    (row[2] || 'VIEWER').toString().trim().toUpperCase()
+            }));
+        console.log('Permisos cargados:', APP.db.permisos);
+        return true;
+    } catch(e) {
+        console.error('Error cargando permisos:', e);
+        return false;
+    }
+}
+
+function configurarUI(perm) {
+    // Badge del usuario en el header
+    const badge   = document.getElementById('userBadge');
+    const avatarEl = document.getElementById('userAvatar');
+    const emailEl  = document.getElementById('userEmail');
+    const roleEl   = document.getElementById('userRole');
+
+    badge.style.display     = 'flex';
+    avatarEl.textContent    = (APP.currentUser.name || APP.currentUser.email)[0].toUpperCase();
+    emailEl.textContent     = APP.currentUser.name || APP.currentUser.email;
+    roleEl.textContent      = perm.rol;
+    roleEl.className        = `role-tag role-${perm.rol}`;
+
+    document.getElementById('logoutBtn').style.display = 'inline-flex';
+    syncStatus('ok', '✅ Sincronizado');
+
+    // Mostrar solo los botones de navegación permitidos para este rol
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+        const allowed = (btn.dataset.role || '').split(',');
+        btn.style.display = allowed.includes(perm.rol) ? 'flex' : 'none';
+    });
+
+    // Activar el primer panel visible
+    const primerBtn = document.querySelector('.nav-btn[style*="flex"]');
+    if (primerBtn) {
+        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        primerBtn.classList.add('active');
+        const panelId = 'panel-' + primerBtn.dataset.panel;
+        const panel   = document.getElementById(panelId);
+        if (panel) panel.classList.add('active');
+    }
+}
+
+function handleSignout() {
+    const token = gapi.client.getToken();
+    if (token) {
+        google.accounts.oauth2.revoke(token.access_token);
+        gapi.client.setToken('');
+    }
+    APP.authed      = false;
+    APP.currentUser = null;
+    APP.db.permisos = [];
+    showLogin();
+}
+
+// ─── CARGA COMPLETA DESDE GOOGLE SHEETS ──────────────────────
+async function loadFromSheets() {
+    syncStatus('g', '🔄 Cargando...');
+    try {
+        // Estudiantes
+        try {
+            const res = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.ESTUDIANTES
+            });
+            if (res.result.values) {
+                APP.db.students = res.result.values.map(r => ({
+                    id: r[0]||'', name: r[1]||'', dni: r[2]||'', email: r[3]||'',
+                    phone: r[4]||'', course: r[5]||'', schedule: r[6]||'',
+                    photoUrl: r[7]||'', qrUrl: r[8]||'', createdAt: r[9]||'',
+                    registeredBy: r[10]||''
+                }));
+            }
+        } catch(e) { console.warn('Error cargando Estudiantes:', e); }
+
+        // Asistencia
+        try {
+            const res = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.ASISTENCIA
+            });
+            if (res.result.values) {
+                APP.db.attendance = res.result.values.map(r => ({
+                    sid: r[0]||'', name: r[1]||'', dni: r[2]||'', course: r[3]||'',
+                    schedule: r[4]||'', date: r[5]||'', time: r[6]||'',
+                    type: r[7]||'', registeredBy: r[8]||''
+                }));
+            }
+        } catch(e) { console.warn('Error cargando Asistencia:', e); }
+
+        // Cursos
+        try {
+            const res = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.CURSOS
+            });
+            if (res.result.values) {
+                APP.db.courses = res.result.values.map(r => ({
+                    id: r[0]||'', name: r[1]||'', grade: r[2]||'',
+                    active: (r[3]||'SI').toUpperCase() === 'SI',
+                    description: r[4]||''
+                }));
+            }
+        } catch(e) { console.warn('Error cargando Cursos:', e); }
+
+        // Horarios
+        try {
+            const res = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.HORARIOS
+            });
+            if (res.result.values) {
+                APP.db.schedules = res.result.values.map(r => ({
+                    courseId: r[0]||'', courseName: r[1]||'', day: r[2]||'',
+                    startTime: r[3]||'', endTime: r[4]||'', room: r[5]||''
+                }));
+            }
+        } catch(e) { console.warn('Error cargando Horarios:', e); }
+
+        // Permisos (recargar para tener la lista actualizada en la UI de gestión)
+        try {
+            const res = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.PERMISOS
+            });
+            if (res.result.values) {
+                APP.db.permisos = res.result.values
+                    .filter(r => r[0] && r[0].toString().trim() !== '')
+                    .map(r => ({
+                        email:  r[0].toString().trim().toLowerCase(),
+                        nombre: (r[1]||'').toString().trim(),
+                        rol:    (r[2]||'VIEWER').toString().trim().toUpperCase()
+                    }));
+            }
+        } catch(e) { console.warn('Error recargando Permisos:', e); }
+
+        saveLocal();
+        syncStatus('ok', '✅ Sincronizado');
+    } catch(e) {
+        console.error('Error general al cargar:', e);
+        syncStatus('err', '❌ Error de conexión');
+    }
+}
+
+// ─── SUBIR A DRIVE ───────────────────────────────────────────
+async function uploadToDrive(fileName, base64Data, mimeType) {
+    if (!APP.authed) return '';
+    try {
+        const rawBase64 = base64Data.split(',')[1];
+        const metadata  = JSON.stringify({ name: fileName, parents: [CONFIG.FOLDER_ID], mimeType });
+        const body = `--boundary\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--boundary\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${rawBase64}\r\n--boundary--`;
+        const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method:  'POST',
+            headers: {
+                'Authorization': 'Bearer ' + gapi.client.getToken().access_token,
+                'Content-Type':  'multipart/related; boundary=boundary'
+            },
+            body
+        });
+        const file = await res.json();
+        return file.id ? `https://drive.google.com/uc?export=view&id=${file.id}` : '';
+    } catch(e) { return ''; }
+}
+
 // ─── FOTO ────────────────────────────────────────────────────
 function loadPhoto(input) {
     const file = input.files[0];
@@ -438,7 +446,8 @@ function loadPhoto(input) {
         const img = new Image();
         img.onload = () => {
             const canvas = document.createElement('canvas');
-            canvas.width = CONFIG.PHOTO.WIDTH; canvas.height = CONFIG.PHOTO.HEIGHT;
+            canvas.width  = CONFIG.PHOTO.WIDTH;
+            canvas.height = CONFIG.PHOTO.HEIGHT;
             canvas.getContext('2d').drawImage(img, 0, 0, CONFIG.PHOTO.WIDTH, CONFIG.PHOTO.HEIGHT);
             APP.currentPhoto = canvas.toDataURL('image/jpeg', CONFIG.PHOTO.QUALITY);
             document.getElementById('photoCircle').innerHTML = `<img src="${APP.currentPhoto}" alt="Foto">`;
@@ -452,19 +461,16 @@ function loadPhoto(input) {
 function updateScheduleOptions() {
     const courseSelect   = document.getElementById('inputCourse');
     const scheduleSelect = document.getElementById('inputSchedule');
-    const courseName = courseSelect.value;
+    const courseName     = courseSelect.value;
 
     if (!courseName) {
         scheduleSelect.innerHTML = '<option value="">Primero selecciona un curso</option>';
         return;
     }
 
-    // Buscar la ID del curso seleccionado
-    const course = APP.db.courses.find(c => c.name === courseName);
+    const course   = APP.db.courses.find(c => c.name === courseName);
     const courseId = course ? course.id : null;
-
-    // Filtrar horarios por curso
-    let schedules = APP.db.schedules.filter(s =>
+    const schedules = APP.db.schedules.filter(s =>
         s.courseName === courseName || s.courseId === courseId
     );
 
@@ -473,27 +479,7 @@ function updateScheduleOptions() {
         return;
     }
 
-    // Agrupar por horario único (día + hora + aula)
-    const uniqueSchedules = [];
-    const seen = new Set();
-    schedules.forEach(s => {
-        const key = `${s.day} ${s.startTime}-${s.endTime}`;
-        if (!seen.has(key)) {
-            seen.add(key);
-            uniqueSchedules.push(s);
-        }
-    });
-
-    // Construir opciones agrupadas por horario
-    const dayGroups = {};
-    schedules.forEach(s => {
-        const label = `${capitalize(s.day)}: ${s.startTime}–${s.endTime}${s.room ? ' · ' + s.room : ''}`;
-        if (!dayGroups[label]) dayGroups[label] = [];
-        dayGroups[label].push(s.day);
-    });
-
-    // Generar opciones con los días que tiene ese horario
-    const allDays = ['lunes','martes','miércoles','jueves','viernes','sábado'];
+    // Agrupar por bloque de horario (hora + aula)
     const blockGroups = {};
     schedules.forEach(s => {
         const key = `${s.startTime}-${s.endTime}|${s.room||''}`;
@@ -502,35 +488,33 @@ function updateScheduleOptions() {
     });
 
     scheduleSelect.innerHTML = '<option value="">Seleccionar horario...</option>';
-    Object.entries(blockGroups).forEach(([key, block]) => {
+    Object.values(blockGroups).forEach(block => {
         const daysStr = block.days.map(capitalize).join(', ');
         const label   = `${daysStr}: ${block.start}–${block.end}${block.room ? ' · ' + block.room : ''}`;
-        const opt = document.createElement('option');
-        opt.value = label;
+        const opt     = document.createElement('option');
+        opt.value     = label;
         opt.textContent = label;
         scheduleSelect.appendChild(opt);
     });
 }
 
-function capitalize(str) { return str ? str.charAt(0).toUpperCase() + str.slice(1) : str; }
-
-// ─── REGISTRO ────────────────────────────────────────────────
+// ─── REGISTRO DE ESTUDIANTE ──────────────────────────────────
 async function doRegister(event) {
     event.preventDefault();
     const qrDiv = document.getElementById('qrcode');
     qrDiv.innerHTML = '';
 
     const student = {
-        id:          'SID' + Date.now(),
-        name:        document.getElementById('inputName').value.trim(),
-        dni:         document.getElementById('inputDni').value.trim(),
-        email:       document.getElementById('inputEmail').value.trim(),
-        phone:       document.getElementById('inputPhone').value.trim(),
-        course:      document.getElementById('inputCourse').value,
-        schedule:    document.getElementById('inputSchedule').value,
-        photoUrl:    '',
-        qrUrl:       '',
-        createdAt:   new Date().toISOString(),
+        id:           'SID' + Date.now(),
+        name:         document.getElementById('inputName').value.trim(),
+        dni:          document.getElementById('inputDni').value.trim(),
+        email:        document.getElementById('inputEmail').value.trim(),
+        phone:        document.getElementById('inputPhone').value.trim(),
+        course:       document.getElementById('inputCourse').value,
+        schedule:     document.getElementById('inputSchedule').value,
+        photoUrl:     '',
+        qrUrl:        '',
+        createdAt:    new Date().toISOString(),
         registeredBy: APP.currentUser ? APP.currentUser.email : 'local'
     };
 
@@ -552,12 +536,12 @@ async function doRegister(event) {
     if (APP.authed) {
         document.getElementById('qrStatus').textContent = '🔄 Subiendo datos...';
         student.photoUrl = APP.currentPhoto ? await uploadToDrive(`Foto_${student.dni}.jpg`, APP.currentPhoto, 'image/jpeg') : '';
-        const qrCanvas = qrDiv.querySelector('canvas');
-        student.qrUrl  = await uploadToDrive(`QR_${student.dni}.png`, qrCanvas.toDataURL(), 'image/png');
+        const qrCanvas   = qrDiv.querySelector('canvas');
+        student.qrUrl    = await uploadToDrive(`QR_${student.dni}.png`, qrCanvas.toDataURL(), 'image/png');
 
         await gapi.client.sheets.spreadsheets.values.append({
             spreadsheetId: CONFIG.SHEET_ID,
-            range: CONFIG.SHEETS.ESTUDIANTES,
+            range:         CONFIG.SHEETS.ESTUDIANTES,
             valueInputOption: 'USER_ENTERED',
             resource: { values: [[
                 student.id, student.name, student.dni, student.email, student.phone,
@@ -613,7 +597,7 @@ async function onScanSuccess(decodedText) {
                 if (APP.authed) {
                     await gapi.client.sheets.spreadsheets.values.append({
                         spreadsheetId: CONFIG.SHEET_ID,
-                        range: CONFIG.SHEETS.ASISTENCIA,
+                        range:         CONFIG.SHEETS.ASISTENCIA,
                         valueInputOption: 'USER_ENTERED',
                         resource: { values: [[
                             record.sid, record.name, record.dni, record.course,
@@ -640,7 +624,6 @@ function showScanFeedback(type, title, msg) {
     document.getElementById('scanFeedback').innerHTML =
         `<div class="scan-feedback ${type}"><h4>${title}</h4><p>${msg}</p></div>`;
 }
-
 function showScanNotification(type, studentName, detail, course) {
     const notif = document.getElementById('scanNotification');
     document.getElementById('scanNotifIcon').textContent   = type === 'ok' ? '✅' : type === 'warn' ? '⚠️' : '❌';
@@ -656,6 +639,74 @@ function closeScanNotif() {
     notif.classList.remove('visible');
     notif.classList.add('notif-hiding');
     setTimeout(() => { notif.className = 'scan-notification'; }, 350);
+}
+
+// ─── GESTIÓN DE PERMISOS ─────────────────────────────────────
+async function addPermiso(event) {
+    event.preventDefault();
+    const email  = document.getElementById('permEmail').value.trim().toLowerCase();
+    const nombre = document.getElementById('permNombre').value.trim();
+    const rol    = document.getElementById('permRol').value;
+
+    if (APP.db.permisos.find(p => p.email === email)) {
+        showToast('warn', 'Ya existe', `${email} ya tiene permisos registrados.`);
+        return;
+    }
+
+    APP.db.permisos.push({ email, nombre, rol });
+    saveLocal();
+
+    try {
+        await gapi.client.sheets.spreadsheets.values.append({
+            spreadsheetId: CONFIG.SHEET_ID,
+            range:         CONFIG.SHEETS.PERMISOS,
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [[email, nombre, rol]] }
+        });
+        showToast('ok', 'Permiso agregado', `${email} — ${rol}`);
+    } catch(e) {
+        showToast('warn', 'Solo guardado local', 'No se pudo sincronizar con Sheets.');
+    }
+
+    document.getElementById('permForm').reset();
+    renderPermisos();
+}
+
+async function deletePermiso(email) {
+    APP.db.permisos = APP.db.permisos.filter(p => p.email !== email);
+    saveLocal();
+    renderPermisos();
+    showToast('ok', 'Permiso eliminado', email);
+    try {
+        await gapi.client.sheets.spreadsheets.values.clear({
+            spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.PERMISOS
+        });
+        if (APP.db.permisos.length) {
+            await gapi.client.sheets.spreadsheets.values.update({
+                spreadsheetId: CONFIG.SHEET_ID,
+                range:         'Permisos!A2',
+                valueInputOption: 'USER_ENTERED',
+                resource: { values: APP.db.permisos.map(p => [p.email, p.nombre, p.rol]) }
+            });
+        }
+    } catch(e) { console.warn('Error sincronizando eliminación de permiso:', e); }
+}
+
+function renderPermisos() {
+    const tbody = document.getElementById('permisosBody');
+    if (!tbody) return;
+    if (!APP.db.permisos.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No hay permisos registrados</td></tr>';
+        return;
+    }
+    tbody.innerHTML = APP.db.permisos.map(p => `
+        <tr>
+            <td>${p.email}</td>
+            <td>${p.nombre || '—'}</td>
+            <td><span class="role-tag role-${p.rol}">${p.rol}</span></td>
+            <td><button class="btn btn-red btn-xs" onclick="deletePermiso('${p.email}')">🗑 Eliminar</button></td>
+        </tr>
+    `).join('');
 }
 
 // ─── RENDER ──────────────────────────────────────────────────
@@ -689,8 +740,8 @@ function renderRecentRegistrations() {
 }
 
 function renderStudentsTable() {
-    const query = (document.getElementById('searchBox')?.value || '').toLowerCase();
-    const today = getToday();
+    const query  = (document.getElementById('searchBox')?.value || '').toLowerCase();
+    const today  = getToday();
     const filtered = APP.db.students.filter(s =>
         s.name.toLowerCase().includes(query) ||
         s.dni.includes(query) ||
@@ -701,7 +752,7 @@ function renderStudentsTable() {
     if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">No se encontraron estudiantes</td></tr>'; return; }
     tbody.innerHTML = filtered.map(s => {
         const hasEntry = APP.db.attendance.find(a => a.sid === s.id && a.date === today && a.type === CONFIG.TIPOS.ENTRADA);
-        const color = getAvatarColor(s.name);
+        const color    = getAvatarColor(s.name);
         return `<tr>
             <td><div class="cell-name">
                 <div class="avatar" style="background:${color}">${getInitials(s.name)}</div>
@@ -718,7 +769,7 @@ function renderStudentsTable() {
 
 function renderTodayLog() {
     const today = getToday();
-    const log = APP.db.attendance.filter(a => a.date === today).reverse();
+    const log   = APP.db.attendance.filter(a => a.date === today).reverse();
     ['todayLog','todayLog2'].forEach(id => {
         const c = document.getElementById(id);
         if (!c) return;
@@ -741,29 +792,29 @@ function renderAttendanceStats() {
     const total   = APP.db.students.length;
     const present = new Set(APP.db.attendance.filter(a => a.date === today && a.type === CONFIG.TIPOS.ENTRADA).map(a => a.sid)).size;
     const exits   = APP.db.attendance.filter(a => a.date === today && a.type === CONFIG.TIPOS.SALIDA).length;
-    document.getElementById('statTotal').textContent   = total;
-    document.getElementById('statPresent').textContent = present;
-    document.getElementById('statAbsent').textContent  = Math.max(0, total - present);
-    document.getElementById('statExits').textContent   = exits;
+    const statTotal   = document.getElementById('statTotal');
+    const statPresent = document.getElementById('statPresent');
+    const statAbsent  = document.getElementById('statAbsent');
+    const statExits   = document.getElementById('statExits');
+    if (statTotal)   statTotal.textContent   = total;
+    if (statPresent) statPresent.textContent = present;
+    if (statAbsent)  statAbsent.textContent  = Math.max(0, total - present);
+    if (statExits)   statExits.textContent   = exits;
 }
 
 // ─── REPORTES ────────────────────────────────────────────────
 function populateCourseFilters() {
-    // Cursos activos desde sheets
     let courseNames = APP.db.courses.filter(c => c.active !== false).map(c => c.name);
     if (!courseNames.length) courseNames = [...new Set(APP.db.students.map(s => s.course))].filter(Boolean);
     courseNames = [...new Set(courseNames)].sort();
 
-    // Llenar inputCourse del formulario de registro
     const inputCourse = document.getElementById('inputCourse');
     if (inputCourse) {
         const cur = inputCourse.value;
         inputCourse.innerHTML = '<option value="">Seleccionar curso...</option>' +
             courseNames.map(n => `<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('');
-        if (!courseNames.length) inputCourse.innerHTML = '<option value="">Sin cursos cargados</option>';
     }
 
-    // Reportes - cursos
     const rg = document.getElementById('reportGrade');
     if (rg) {
         const cur = rg.value;
@@ -771,7 +822,6 @@ function populateCourseFilters() {
             courseNames.map(n => `<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('');
     }
 
-    // Reportes - horarios únicos
     const rs = document.getElementById('reportSchedule');
     if (rs) {
         const schedules = [...new Set(APP.db.students.map(s => s.schedule))].filter(Boolean).sort();
@@ -801,12 +851,17 @@ function renderReports() {
     const presentIds = new Set(entries.map(a => a.sid));
     const absent     = students.filter(s => !presentIds.has(s.id));
 
-    document.getElementById('reportTotal').textContent   = students.length;
-    document.getElementById('reportPresent').textContent = entries.length;
-    document.getElementById('reportAbsent').textContent  = absent.length;
-    document.getElementById('reportExits').textContent   = exits.length;
+    const rTotal   = document.getElementById('reportTotal');
+    const rPresent = document.getElementById('reportPresent');
+    const rAbsent  = document.getElementById('reportAbsent');
+    const rExits   = document.getElementById('reportExits');
+    if (rTotal)   rTotal.textContent   = students.length;
+    if (rPresent) rPresent.textContent = entries.length;
+    if (rAbsent)  rAbsent.textContent  = absent.length;
+    if (rExits)   rExits.textContent   = exits.length;
 
     const body = document.getElementById('reportBody');
+    if (!body) return;
     if (!entries.length && !absent.length) {
         body.innerHTML = '<tr><td colspan="6" class="empty-msg">Sin datos para este filtro</td></tr>'; return;
     }
@@ -814,7 +869,7 @@ function renderReports() {
     entries.forEach(a => {
         rows += `<tr>
             <td><b>${a.name}</b></td>
-            <td><span class="course-badge">${a.course} </span></td>
+            <td><span class="course-badge">${a.course}</span></td>
             <td>${a.date}</td>
             <td><span class="tag tag-ok">Presente</span></td>
             <td>${a.time}</td>
@@ -825,7 +880,7 @@ function renderReports() {
         rows += `<tr>
             <td><b>${s.name}</b></td>
             <td><span class="course-badge">${s.course}</span></td>
-            <td>${dateFrom===dateTo?dateFrom:`${dateFrom}–${dateTo}`}</td>
+            <td>${dateFrom===dateTo ? dateFrom : `${dateFrom}–${dateTo}`}</td>
             <td><span class="tag tag-no">Ausente</span></td>
             <td>—</td><td>—</td>
         </tr>`;
@@ -837,13 +892,13 @@ function renderReports() {
 function renderScheduleForDay(dateStr) {
     const container = document.getElementById('scheduleToday');
     if (!container) return;
-    const days = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
-    const dow  = days[new Date(dateStr + 'T12:00:00').getDay()];
+    const days  = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+    const dow   = days[new Date(dateStr + 'T12:00:00').getDay()];
     const sched = APP.db.schedules.filter(s => s.day.toLowerCase() === dow);
     if (!sched.length) { container.innerHTML = '<p class="empty-msg">No hay horarios para este día</p>'; return; }
     container.innerHTML = sched.map(s => `
         <div class="list-row">
-            <div><b>${s.courseName}</b><br><small style="color:var(--txt2)">${s.room?'Aula: '+s.room:''}</small></div>
+            <div><b>${s.courseName}</b><br><small style="color:var(--txt2)">${s.room ? 'Aula: ' + s.room : ''}</small></div>
             <span class="list-time">${s.startTime} – ${s.endTime}</span>
         </div>
     `).join('');
@@ -902,7 +957,7 @@ function downloadReport() {
     y += 10;
 
     const addRow = (name,course,date,status,entry,exit,even) => {
-        if (y>278){doc.addPage();y=20;}
+        if (y > 278) { doc.addPage(); y = 20; }
         if (even) { doc.setFillColor(248,246,242); doc.rect(14,y-4,pageW-28,7,'F'); }
         doc.setFontSize(8);
         doc.text(name.substring(0,28),16,y);
@@ -911,18 +966,18 @@ function downloadReport() {
         doc.text(status,130,y);
         doc.text(entry,150,y);
         doc.text(exit,172,y);
-        y+=7;
+        y += 7;
     };
-    entries.forEach((a,i) => addRow(a.name,a.course,a.date,'PRESENTE',a.time,exits.find(x=>x.sid===a.sid&&x.date===a.date)?.time||'—',i%2===0));
-    absent.forEach((s,i) => addRow(s.name,s.course,'—','AUSENTE','—','—',(entries.length+i)%2===0));
+    entries.forEach((a,i) => addRow(a.name, a.course, a.date, 'PRESENTE', a.time, exits.find(x=>x.sid===a.sid&&x.date===a.date)?.time||'—', i%2===0));
+    absent.forEach((s,i) => addRow(s.name, s.course, '—', 'AUSENTE', '—', '—', (entries.length+i)%2===0));
 
-    y+=8;
+    y += 8;
     doc.setFontSize(7); doc.setTextColor(150);
     doc.text(`Generado: ${new Date().toLocaleString('es-BO')} | Instituto CEAN`, 14, y);
 
-    const fn = `Reporte_CEAN_${dateFrom}_${dateTo}${course?'_'+course.substring(0,20):''}.pdf`;
+    const fn = `Reporte_CEAN_${dateFrom}_${dateTo}${course ? '_'+course.substring(0,20) : ''}.pdf`;
     doc.save(fn);
-    showToast('ok','Reporte generado',fn);
+    showToast('ok', 'Reporte generado', fn);
 }
 
 // ─── MODAL QR ────────────────────────────────────────────────
@@ -939,7 +994,7 @@ function openQRModal(studentId) {
 }
 function closeModal() { document.getElementById('overlay').classList.remove('open'); }
 
-// ─── CARNET / PDF ────────────────────────────────────────────
+// ─── CARNET PDF ──────────────────────────────────────────────
 function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
@@ -953,7 +1008,7 @@ function drawAvatarPlaceholder(ctx, student, x, y, w, h) {
     ctx.fillStyle = g; ctx.fillRect(x,y,w,h);
     const initials = student.name.split(' ').map(p=>p[0]).join('').substring(0,2).toUpperCase();
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = `bold 72px Georgia,serif`;
+    ctx.font = 'bold 72px Georgia,serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(initials, x+w/2, y+h/2);
     ctx.textBaseline = 'alphabetic';
@@ -965,231 +1020,91 @@ async function buildCredentialCanvas(student, qrSourceCanvas, photoDataUrl) {
     c.width = W; c.height = H;
     const ctx = c.getContext('2d');
 
-    const navy  = '#0f1e33';
-    const navyM = '#1a2e4a';
-    const navyL = '#243f63';
-    const gold  = '#d4a843';
-    const goldL = '#f0c860';
-    const white = '#ffffff';
-    const cream = '#fdf8f0';
+    const navy = '#0f1e33', navyM = '#1a2e4a', gold = '#d4a843', goldL = '#f0c860', white = '#ffffff';
 
-    // ── Fondo principal ──────────────────────────────────────
-    ctx.fillStyle = navyM;
-    ctx.fillRect(0, 0, W, H);
+    const bgG = ctx.createLinearGradient(0,0,W,H);
+    bgG.addColorStop(0,'#0d1b2a'); bgG.addColorStop(0.5,'#1a2e4a'); bgG.addColorStop(1,'#142338');
+    ctx.fillStyle = bgG; ctx.fillRect(0,0,W,H);
 
-    // Gradiente diagonal suave
-    const bgG = ctx.createLinearGradient(0, 0, W, H);
-    bgG.addColorStop(0, '#0d1b2a');
-    bgG.addColorStop(0.5, '#1a2e4a');
-    bgG.addColorStop(1, '#142338');
-    ctx.fillStyle = bgG;
-    ctx.fillRect(0, 0, W, H);
-
-    // Patrón de puntos de fondo (sutil)
-    ctx.save();
-    ctx.globalAlpha = 0.04;
-    for (let px = 20; px < W; px += 40) {
+    ctx.save(); ctx.globalAlpha = 0.04;
+    for (let px = 20; px < W; px += 40)
         for (let py = 20; py < H; py += 40) {
-            ctx.beginPath(); ctx.arc(px, py, 1.5, 0, Math.PI*2);
+            ctx.beginPath(); ctx.arc(px,py,1.5,0,Math.PI*2);
             ctx.fillStyle = white; ctx.fill();
         }
-    }
     ctx.restore();
 
-    // ── FRANJA LATERAL IZQUIERDA (decorativa) ────────────────
-    const stripeGrad = ctx.createLinearGradient(0, 0, 0, H);
-    stripeGrad.addColorStop(0, gold);
-    stripeGrad.addColorStop(0.5, goldL);
-    stripeGrad.addColorStop(1, gold);
-    ctx.fillStyle = stripeGrad;
-    ctx.fillRect(0, 0, 8, H);
+    const stripeGrad = ctx.createLinearGradient(0,0,0,H);
+    stripeGrad.addColorStop(0,gold); stripeGrad.addColorStop(0.5,'#b8922e'); stripeGrad.addColorStop(1,gold);
+    ctx.fillStyle = stripeGrad; ctx.fillRect(0,0,8,H);
+    ctx.fillStyle = 'rgba(212,168,67,0.15)'; ctx.fillRect(8,0,4,H);
 
-    // ── FRANJA LATERAL DERECHA ───────────────────────────────
-    ctx.fillStyle = stripeGrad;
-    ctx.fillRect(W-8, 0, 8, H);
+    const hG = ctx.createLinearGradient(0,0,W,0);
+    hG.addColorStop(0,navy); hG.addColorStop(0.6,'#1a2e4a'); hG.addColorStop(1,'#243f63');
+    ctx.fillStyle = hG; ctx.fillRect(0,0,W,72);
+    ctx.fillStyle = gold; ctx.fillRect(0,72,W,3);
 
-    // ── HEADER ───────────────────────────────────────────────
-    const hdrH = 120;
-    const hdrG = ctx.createLinearGradient(0, 0, W, 0);
-    hdrG.addColorStop(0, '#0a1828');
-    hdrG.addColorStop(0.5, '#162338');
-    hdrG.addColorStop(1, '#0a1828');
-    ctx.fillStyle = hdrG;
-    ctx.fillRect(0, 0, W, hdrH);
-
-    // Línea dorada separadora
-    ctx.fillStyle = gold;
-    ctx.fillRect(0, hdrH, W, 3);
-    ctx.fillStyle = goldL;
-    ctx.fillRect(0, hdrH+3, W, 1);
-
-    // ── LOGO / ÍCONO ─────────────────────────────────────────
-    const logoX = 38, logoY = 18, logoR = 42;
-    // Fondo circular con gradiente
-    const lgG = ctx.createRadialGradient(logoX+logoR, logoY+logoR, 10, logoX+logoR, logoY+logoR, logoR);
-    lgG.addColorStop(0, 'rgba(212,168,67,0.2)');
-    lgG.addColorStop(1, 'rgba(212,168,67,0.05)');
-    ctx.beginPath(); ctx.arc(logoX+logoR, logoY+logoR, logoR, 0, Math.PI*2);
-    ctx.fillStyle = lgG; ctx.fill();
-    // Borde dorado fino
-    ctx.strokeStyle = gold; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(logoX+logoR, logoY+logoR, logoR, 0, Math.PI*2); ctx.stroke();
-    // Texto ícono
-    ctx.font = '44px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = gold;
-    ctx.fillText('🎓', logoX+logoR, logoY+logoR+2);
-    ctx.textBaseline = 'alphabetic';
-
-    // ── NOMBRE INSTITUTO ─────────────────────────────────────
-    ctx.textAlign = 'center';
-    ctx.fillStyle = white;
-    ctx.font = 'bold 30px Georgia,serif';
-    ctx.letterSpacing = '3px';
-    ctx.fillText('INSTITUTO CEAN', W/2 + 30, 46);
-    ctx.font = '12px Arial,sans-serif';
-    ctx.fillStyle = gold;
-    ctx.letterSpacing = '5px';
-    ctx.fillText('SISTEMA DE ASISTENCIA', W/2 + 30, 70);
-    ctx.font = 'bold 10px Arial,sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.letterSpacing = '3px';
-    ctx.fillText('CARNET DE IDENTIDAD ESTUDIANTIL', W/2 + 30, 95);
+    ctx.font = 'bold 13px Arial,sans-serif'; ctx.fillStyle = goldL;
+    ctx.textAlign = 'center'; ctx.letterSpacing = '4px';
+    ctx.fillText('INSTITUTO', W/2, 30); ctx.letterSpacing = '0px';
+    ctx.font = 'bold 28px Crimson Pro,Georgia,serif'; ctx.fillStyle = white;
+    ctx.fillText('CEAN', W/2, 58);
+    ctx.font = '10px Arial,sans-serif'; ctx.fillStyle = 'rgba(212,168,67,0.7)';
+    ctx.letterSpacing = '2px'; ctx.fillText('SISTEMA DE ASISTENCIA', W/2, 70);
     ctx.letterSpacing = '0px';
 
-    // ── FOTO ─────────────────────────────────────────────────
-    // Layout: foto a la izquierda, datos al centro, QR a la derecha
-    // Con espacios bien definidos para que nada se intersecte
-    const MARGIN_L = 22;
-    const photoX = MARGIN_L, photoY = 136;
-    const photoW = 190, photoH = 234;
-    const photoR = 14;
-
-    // Sombra de la foto
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 18;
-    ctx.shadowOffsetX = 4; ctx.shadowOffsetY = 4;
-    roundRect(ctx, photoX-4, photoY-4, photoW+8, photoH+8, photoR+2);
-    ctx.fillStyle = gold; ctx.fill();
-    ctx.restore();
-
-    // Marco dorado
-    roundRect(ctx, photoX-4, photoY-4, photoW+8, photoH+8, photoR+2);
-    ctx.fillStyle = gold; ctx.fill();
-
-    // Recorte de foto
-    ctx.save();
-    roundRect(ctx, photoX, photoY, photoW, photoH, photoR);
-    ctx.clip();
-    ctx.fillStyle = navyL; ctx.fillRect(photoX, photoY, photoW, photoH);
+    const photoX = 20, photoY = 90, photoW = 220, photoH = 270;
     if (photoDataUrl) {
-        try {
-            await new Promise(res => {
-                const img = new Image();
-                img.onload = () => {
-                    const s = Math.min(img.width, img.height);
-                    const sx = (img.width-s)/2, sy = (img.height-s)/2;
-                    ctx.drawImage(img, sx, sy, s, s, photoX, photoY, photoW, photoH);
-                    res();
-                };
-                img.onerror = res; img.src = photoDataUrl;
-            });
-        } catch(e) { drawAvatarPlaceholder(ctx, student, photoX, photoY, photoW, photoH); }
-    } else { drawAvatarPlaceholder(ctx, student, photoX, photoY, photoW, photoH); }
-    ctx.restore();
+        await new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => { ctx.drawImage(img, photoX, photoY, photoW, photoH); resolve(); };
+            img.onerror = () => { drawAvatarPlaceholder(ctx, student, photoX, photoY, photoW, photoH); resolve(); };
+            img.src = photoDataUrl;
+        });
+    } else {
+        drawAvatarPlaceholder(ctx, student, photoX, photoY, photoW, photoH);
+    }
+    ctx.strokeStyle = gold; ctx.lineWidth = 2;
+    ctx.strokeRect(photoX, photoY, photoW, photoH);
 
-    // Etiqueta bajo foto
-    ctx.fillStyle = gold; ctx.font = 'bold 10px Arial,sans-serif';
-    ctx.textAlign = 'center'; ctx.letterSpacing = '3px';
-    ctx.fillText('ESTUDIANTE', photoX+photoW/2, photoY+photoH+22);
-    ctx.letterSpacing = '0px';
-    ctx.fillStyle = gold; ctx.fillRect(photoX, photoY+photoH+26, photoW, 1.5);
-
-    // ── QR — bien ubicado en su propio bloque ────────────────
-    const qrBoxSize = 190;
-    const qrPad     = 16;
-    const qrTotalW  = qrBoxSize + qrPad*2;
-    const qrTotalH  = qrBoxSize + qrPad*2;
-    const qrX = W - 8 - qrTotalW - 14;  // pegado al borde derecho con margen
-    const qrY = 136;
-
-    // Fondo blanco puro para QR
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 12;
-    ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 2;
-    roundRect(ctx, qrX, qrY, qrTotalW, qrTotalH, 12);
-    ctx.fillStyle = white; ctx.fill();
-    ctx.restore();
-
-    // Borde dorado del QR
-    ctx.save();
-    roundRect(ctx, qrX, qrY, qrTotalW, qrTotalH, 12);
-    ctx.strokeStyle = gold; ctx.lineWidth = 3; ctx.stroke();
-    ctx.restore();
-
-    // Dibujar QR real
     if (qrSourceCanvas) {
-        ctx.drawImage(qrSourceCanvas, qrX + qrPad, qrY + qrPad, qrBoxSize, qrBoxSize);
+        const qrSize = 200, qrX = 20, qrY = 390;
+        ctx.fillStyle = white; ctx.fillRect(qrX-8, qrY-8, qrSize+16, qrSize+16);
+        ctx.drawImage(qrSourceCanvas, qrX, qrY, qrSize, qrSize);
+        ctx.strokeStyle = gold; ctx.lineWidth = 2;
+        ctx.strokeRect(qrX-8, qrY-8, qrSize+16, qrSize+16);
     }
 
-    // Texto bajo QR
-    ctx.fillStyle = gold; ctx.font = 'bold 9px Arial,sans-serif';
-    ctx.textAlign = 'center'; ctx.letterSpacing = '2px';
-    ctx.fillText('ESCANEAR ASISTENCIA', qrX + qrTotalW/2, qrY + qrTotalH + 18);
-    ctx.letterSpacing = '0px';
-
-    // ── DATOS ────────────────────────────────────────────────
-    // Zona de datos: entre foto y QR
-    const dataX = MARGIN_L + photoW + 22;
-    const dataW = qrX - dataX - 16;
-    const dataY = 134;
-
-    // Fondo sutil de datos
-    ctx.save();
-    roundRect(ctx, dataX, dataY, dataW, 256, 10);
-    ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(212,168,67,0.2)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.restore();
-
-    function drawField(label, value, x, y, maxW) {
-        ctx.font = 'bold 9px Arial,sans-serif';
-        ctx.fillStyle = goldL; ctx.textAlign = 'left';
-        ctx.letterSpacing = '2px';
+    const dataX = 260, dataY = 82, dataW = W - dataX - 20;
+    const drawField = (label, value, x, y, maxW) => {
+        ctx.font = 'bold 9px Arial,sans-serif'; ctx.fillStyle = goldL;
+        ctx.textAlign = 'left'; ctx.letterSpacing = '2px';
         ctx.fillText(label.toUpperCase(), x+10, y);
         ctx.letterSpacing = '0px';
-        ctx.fillStyle = 'rgba(212,168,67,0.25)';
-        ctx.fillRect(x+10, y+4, maxW-20, 1);
-
-        let fs = 19;
-        ctx.font = `bold ${fs}px Georgia,serif`;
+        ctx.fillStyle = 'rgba(212,168,67,0.25)'; ctx.fillRect(x+10, y+4, maxW-20, 1);
+        let fs = 19; ctx.font = `bold ${fs}px Georgia,serif`;
         ctx.fillStyle = white;
         while (ctx.measureText(value).width > maxW-20 && fs > 12) {
             fs--; ctx.font = `bold ${fs}px Georgia,serif`;
         }
         ctx.fillText(value, x+10, y+24);
-    }
+    };
 
-    // Nombre completo
     ctx.font = 'bold 9px Arial,sans-serif'; ctx.fillStyle = goldL;
     ctx.textAlign = 'left'; ctx.letterSpacing = '2px';
     ctx.fillText('NOMBRE COMPLETO', dataX+10, dataY+16);
     ctx.letterSpacing = '0px';
-    ctx.fillStyle = 'rgba(212,168,67,0.25)';
-    ctx.fillRect(dataX+10, dataY+20, dataW-20, 1);
+    ctx.fillStyle = 'rgba(212,168,67,0.25)'; ctx.fillRect(dataX+10, dataY+20, dataW-20, 1);
 
-    // Nombre adaptable
     let nfs = 22; ctx.font = `bold ${nfs}px Georgia,serif`;
     const fullName = student.name.toUpperCase();
-    while (ctx.measureText(fullName).width > dataW-20 && nfs > 13) {
-        nfs--; ctx.font = `bold ${nfs}px Georgia,serif`;
-    }
+    while (ctx.measureText(fullName).width > dataW-20 && nfs > 13) { nfs--; ctx.font = `bold ${nfs}px Georgia,serif`; }
     if (ctx.measureText(fullName).width > dataW-20) {
         const words = fullName.split(' '), half = Math.ceil(words.length/2);
-        const l1 = words.slice(0,half).join(' '), l2 = words.slice(half).join(' ');
         nfs = 18; ctx.font = `bold ${nfs}px Georgia,serif`;
         ctx.fillStyle = white; ctx.textAlign = 'left';
-        ctx.fillText(l1, dataX+10, dataY+46);
-        ctx.fillText(l2, dataX+10, dataY+68);
+        ctx.fillText(words.slice(0,half).join(' '), dataX+10, dataY+46);
+        ctx.fillText(words.slice(half).join(' '),   dataX+10, dataY+68);
     } else {
         ctx.fillStyle = white; ctx.textAlign = 'left';
         ctx.fillText(fullName, dataX+10, dataY+52);
@@ -1197,40 +1112,24 @@ async function buildCredentialCanvas(student, qrSourceCanvas, photoDataUrl) {
 
     const col2X = dataX + dataW/2;
     drawField('Carnet de Identidad', student.dni,     dataX,  dataY+98,  dataW/2);
-    drawField('Año',                 new Date().getFullYear()+'', col2X, dataY+98,  dataW/2);
-    // Curso — campo ancho
-    drawField('Curso', student.course||'—',           dataX,  dataY+152, dataW);
-    // Horario
-    const schedLabel = (student.schedule||'—').substring(0, 50);
-    drawField('Horario',             schedLabel,       dataX,  dataY+206, dataW);
+    drawField('Año', new Date().getFullYear()+'',      col2X, dataY+98,  dataW/2);
+    drawField('Curso', student.course||'—',            dataX,  dataY+152, dataW);
+    drawField('Horario', (student.schedule||'—').substring(0,50), dataX, dataY+206, dataW);
 
-    // ── FOOTER ───────────────────────────────────────────────
     const footY = H - 58;
     const fG = ctx.createLinearGradient(0,footY,W,footY);
     fG.addColorStop(0,'#0a1828'); fG.addColorStop(0.5,'#132030'); fG.addColorStop(1,'#0a1828');
-    ctx.fillStyle = fG; ctx.fillRect(0, footY, W, H-footY);
-    ctx.fillStyle = gold; ctx.fillRect(0, footY, W, 3);
+    ctx.fillStyle = fG; ctx.fillRect(0,footY,W,H-footY);
+    ctx.fillStyle = gold; ctx.fillRect(0,footY,W,3);
 
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = '9px Arial,sans-serif';
+    ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '9px Arial,sans-serif';
     ctx.fillText(`ID: ${student.id}`, 22, footY+22);
-
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(212,168,67,0.75)';
-    ctx.font = 'bold 10px Arial,sans-serif';
-    ctx.letterSpacing = '1px';
-    ctx.fillText('DOCUMENTO DE USO EXCLUSIVO — INSTITUTO CEAN', W/2, footY+22);
+    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(212,168,67,0.75)'; ctx.font = 'bold 10px Arial,sans-serif';
+    ctx.letterSpacing = '1px'; ctx.fillText('DOCUMENTO DE USO EXCLUSIVO — INSTITUTO CEAN', W/2, footY+22);
     ctx.letterSpacing = '0px';
-
-    ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = '9px Arial,sans-serif';
+    ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '9px Arial,sans-serif';
     ctx.fillText(`Emitido: ${new Date().toLocaleDateString('es-BO')}`, W-22, footY+22);
-
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.25)';
-    ctx.font = '9px Arial,sans-serif';
+    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.font = '9px Arial,sans-serif';
     ctx.fillText('Válido para el control de ingreso y egreso del establecimiento', W/2, footY+42);
 
     return c;
@@ -1246,10 +1145,10 @@ function buildQRCanvas(studentId) {
             const qrc = tmp.querySelector('canvas');
             const out = document.createElement('canvas');
             const pad = 18;
-            out.width = (qrc ? qrc.width : 220) + pad*2;
+            out.width  = (qrc ? qrc.width  : 220) + pad*2;
             out.height = (qrc ? qrc.height : 220) + pad*2;
             const ctx = out.getContext('2d');
-            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, out.width, out.height);
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,out.width,out.height);
             if (qrc) ctx.drawImage(qrc, pad, pad);
             document.body.removeChild(tmp);
             resolve(out);
@@ -1260,7 +1159,8 @@ function buildQRCanvas(studentId) {
 async function downloadQRPng() {
     const canvas = document.querySelector('#qrcode canvas');
     if (!canvas || !APP.lastStudent) return;
-    const out = document.createElement('canvas'); const pad = 20;
+    const out = document.createElement('canvas');
+    const pad = 20;
     out.width = canvas.width+pad*2; out.height = canvas.height+pad*2;
     const ctx = out.getContext('2d');
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,out.width,out.height);
@@ -1272,10 +1172,10 @@ async function downloadQRPng() {
 async function downloadPDF() {
     if (!APP.lastStudent) return;
     showToast('info', 'Generando carnet...', 'Por favor espera');
-    const { jsPDF } = window.jspdf;
-    const qrCanvas   = await buildQRCanvas(APP.lastStudent.id);
-    const photoUrl   = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
-    const credCanvas = await buildCredentialCanvas(APP.lastStudent, qrCanvas, photoUrl);
+    const { jsPDF }   = window.jspdf;
+    const qrCanvas    = await buildQRCanvas(APP.lastStudent.id);
+    const photoUrl    = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
+    const credCanvas  = await buildCredentialCanvas(APP.lastStudent, qrCanvas, photoUrl);
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [100, 63] });
     doc.addImage(credCanvas.toDataURL('image/jpeg', 0.97), 'JPEG', 0, 0, 100, 63);
     doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
@@ -1285,10 +1185,10 @@ async function downloadPDF() {
 async function downloadPDFFromModal() {
     if (!APP.lastStudent) return;
     showToast('info', 'Generando carnet...', 'Por favor espera');
-    const { jsPDF } = window.jspdf;
-    const qrCanvas   = await buildQRCanvas(APP.lastStudent.id);
-    const photoUrl   = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
-    const credCanvas = await buildCredentialCanvas(APP.lastStudent, qrCanvas, photoUrl);
+    const { jsPDF }   = window.jspdf;
+    const qrCanvas    = await buildQRCanvas(APP.lastStudent.id);
+    const photoUrl    = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
+    const credCanvas  = await buildCredentialCanvas(APP.lastStudent, qrCanvas, photoUrl);
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [100, 63] });
     doc.addImage(credCanvas.toDataURL('image/jpeg', 0.97), 'JPEG', 0, 0, 100, 63);
     doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
@@ -1332,6 +1232,7 @@ function updateScanModeStyles() {
 
 // ─── INIT ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+    loadLocal(); // cargar cache sin permisos
     initNavigation();
     initScanModeToggle();
     const today = getToday();
@@ -1339,4 +1240,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const dt = document.getElementById('reportDateTo');
     if (df) df.value = today;
     if (dt) dt.value = today;
+    // La pantalla de login empieza en modo "cargando" hasta que Google cargue
+    showLoginLoading('Cargando Google...');
 });
