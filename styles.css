@@ -789,7 +789,8 @@ tbody tr:last-child td { border-bottom:none; }
 .scan-notification.notif-ok   .scan-notif-detail { color:var(--green); }
 .scan-notification.notif-warn .scan-notif-detail { color:var(--amber); }
 .scan-notification.notif-bad  .scan-notif-detail { color:var(--red); }
-.scan-notif-course { font-size:14px; color:var(--txt2); background:var(--sand); display:inline-block; padding:6px 18px; border-radius:20px; margin-bottom:22px; font-weight:600; }
+.scan-notif-course { font-size:14px; color:var(--txt2); background:var(--sand); display:inline-block; padding:6px 18px; border-radius:20px; margin-bottom:8px; font-weight:600; }
+.scan-notif-extra  { font-size:12px; color:var(--txt3); margin-bottom:16px; min-height:4px; }
 .scan-notif-hint   { font-size:12px; color:var(--txt3); text-transform:uppercase; letter-spacing:1px; }
 
 .scan-notif-inner::after {
