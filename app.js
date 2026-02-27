@@ -503,6 +503,8 @@ async function doRegister(event) {
     new QRCode(qrDiv, { text: JSON.stringify({ id: student.id }), width: 180, height: 180, correctLevel: QRCode.CorrectLevel.H });
     document.getElementById('qrActions').classList.add('visible');
     APP.lastStudent = { ...student, photo: APP.currentPhoto, photoUrl: APP.currentPhoto||'' };
+    // Guardar foto en cache para el modal
+    if (APP.currentPhoto) cacheStudentPhoto(student.id, APP.currentPhoto);
 
     await new Promise(r => setTimeout(r, 500));
 
@@ -1230,10 +1232,17 @@ function downloadReport() {
 }
 
 // ─── MODAL CARNET 3D ─────────────────────────────────────────
+
+// Cache local de fotos (base64) para el modal
+const photoCache = {};
+
 function openQRModal(studentId) {
     const s = APP.db.students.find(s => s.id === studentId);
     if (!s) return;
-    APP.lastStudent = { ...s, photo: s.photo || (s.photoUrl?.startsWith('data:') ? s.photoUrl : null) };
+
+    // Buscar la foto: 1) cache local base64, 2) photo en objeto, 3) photoUrl base64
+    const cachedPhoto = photoCache[studentId] || s.photo || (s.photoUrl?.startsWith('data:') ? s.photoUrl : null);
+    APP.lastStudent = { ...s, photo: cachedPhoto };
 
     // Reset flip
     const inner = document.getElementById('carnetInner');
@@ -1241,7 +1250,6 @@ function openQRModal(studentId) {
 
     // Rellenar FRENTE
     const initials = (s.name || '?').split(' ').map(w => w[0] || '').join('').substring(0, 2).toUpperCase();
-    document.getElementById('cnInitials').textContent = initials;
     document.getElementById('cnName').textContent     = s.name || '—';
     document.getElementById('cnRole').textContent     = 'Estudiante';
     document.getElementById('cnDept').textContent     = s.course || '—';
@@ -1249,24 +1257,54 @@ function openQRModal(studentId) {
     document.getElementById('cnYear').textContent     = new Date().getFullYear();
     document.getElementById('cnSchedule').textContent = s.schedule || '—';
 
-    // Foto si existe
-    const photoInner = document.getElementById('cnPhotoInner');
+    // Foto: cargar y mostrar
+    const photoInner  = document.getElementById('cnPhotoInner');
     const placeholder = document.getElementById('cnInitials');
+
+    // Limpiar estado anterior
     let existingImg = photoInner.querySelector('img');
-    if (s.photoUrl && s.photoUrl.startsWith('http')) {
+    placeholder.style.display = '';
+    placeholder.textContent   = initials;
+    if (existingImg) { existingImg.style.display = 'none'; }
+
+    function showPhoto(src) {
         placeholder.style.display = 'none';
-        if (!existingImg) { existingImg = document.createElement('img'); photoInner.appendChild(existingImg); }
-        existingImg.src = s.photoUrl;
-        existingImg.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center top;display:block;border-radius:8px;';
-    } else if (APP.lastStudent.photo) {
-        placeholder.style.display = 'none';
-        if (!existingImg) { existingImg = document.createElement('img'); photoInner.appendChild(existingImg); }
-        existingImg.src = APP.lastStudent.photo;
-        existingImg.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center top;display:block;border-radius:8px;';
-    } else {
-        if (existingImg) existingImg.remove();
-        placeholder.style.display = '';
-        placeholder.textContent = initials;
+        if (!existingImg) {
+            existingImg = document.createElement('img');
+            existingImg.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center top;position:absolute;inset:0;border-radius:8px;';
+            photoInner.style.position = 'relative';
+            photoInner.appendChild(existingImg);
+        }
+        existingImg.style.display = 'block';
+        existingImg.src = src;
+        existingImg.onerror = () => {
+            existingImg.style.display = 'none';
+            placeholder.style.display = '';
+        };
+        // También guardar en lastStudent para el PDF
+        APP.lastStudent.photo = src;
+    }
+
+    if (cachedPhoto) {
+        showPhoto(cachedPhoto);
+    } else if (s.photoUrl && s.photoUrl.startsWith('http')) {
+        // Drive URL: intentar cargar vía proxy (blob) para evitar CORS en canvas
+        fetch(s.photoUrl)
+            .then(r => r.blob())
+            .then(blob => {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    const b64 = e.target.result;
+                    photoCache[studentId]   = b64;
+                    APP.lastStudent.photo   = b64;
+                    showPhoto(b64);
+                };
+                reader.readAsDataURL(blob);
+            })
+            .catch(() => {
+                // Si falla el fetch, mostrar imagen directa (funciona en display pero no en canvas)
+                showPhoto(s.photoUrl);
+            });
     }
 
     // Rellenar DORSO
@@ -1285,21 +1323,394 @@ function openQRModal(studentId) {
     document.getElementById('overlay').classList.add('open');
 }
 
+// Llamar esto al registrar un alumno para guardar la foto en cache
+function cacheStudentPhoto(studentId, base64) {
+    if (studentId && base64) photoCache[studentId] = base64;
+}
+
 function closeModal() {
     document.getElementById('overlay').classList.remove('open');
 }
 
 async function downloadCarnetPDF() {
     if (!APP.lastStudent) return;
-    showToast('info', 'Generando carnet...', 'Por favor espera');
-    const { jsPDF } = window.jspdf;
-    const qrC = await buildQRCanvas(APP.lastStudent.id);
-    const ph  = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
-    const cC  = await buildCredentialCanvas(APP.lastStudent, qrC, ph);
-    const doc = new jsPDF({ orientation:'landscape', unit:'mm', format:[100,63] });
-    doc.addImage(cC.toDataURL('image/jpeg', .97), 'JPEG', 0, 0, 100, 63);
-    doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
-    showToast('ok', 'Carnet generado', APP.lastStudent.name);
+    showToast('info', 'Generando PDF...', 'Por favor espera un momento');
+
+    const s   = APP.lastStudent;
+    const doc = new (window.jspdf.jsPDF)({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pw  = doc.internal.pageSize.getWidth();   // 210mm
+    const ph  = doc.internal.pageSize.getHeight();  // 297mm
+
+    // Dimensiones carnet en mm (tarjeta CR80: 85.6 × 54mm)
+    const cw = 85.6, ch = 54;
+    const cx = (pw - cw) / 2;
+
+    // Fondo página
+    doc.setFillColor(15, 20, 28);
+    doc.rect(0, 0, pw, ph, 'F');
+
+    // ── Título ──
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(200, 169, 110);
+    doc.text('INSTITUTO CEAN — CREDENCIAL OFICIAL', pw / 2, 18, { align: 'center' });
+    doc.setFontSize(7);
+    doc.setTextColor(120, 120, 120);
+    doc.text('Sistema de Asistencia Escolar', pw / 2, 23, { align: 'center' });
+
+    // ── Renderizar FRENTE ──
+    const frontCanvas = await renderCarnetFaceToCanvas('front', s);
+    const cy1 = 30;
+    doc.addImage(frontCanvas.toDataURL('image/png'), 'PNG', cx, cy1, cw, ch);
+    // Sombra simulada
+    doc.setDrawColor(200, 169, 110, 0.3);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(cx, cy1, cw, ch, 2, 2, 'S');
+
+    // Etiqueta FRENTE
+    doc.setFontSize(6.5);
+    doc.setTextColor(180, 180, 180);
+    doc.text('▲  FRENTE', cx, cy1 - 2);
+
+    // ── Renderizar REVERSO ──
+    const backCanvas = await renderCarnetFaceToCanvas('back', s);
+    const cy2 = cy1 + ch + 12;
+    doc.addImage(backCanvas.toDataURL('image/png'), 'PNG', cx, cy2, cw, ch);
+    doc.setDrawColor(180, 180, 180, 0.2);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(cx, cy2, cw, ch, 2, 2, 'S');
+
+    // Etiqueta REVERSO
+    doc.setFontSize(6.5);
+    doc.setTextColor(180, 180, 180);
+    doc.text('▲  REVERSO', cx, cy2 - 2);
+
+    // ── Datos del alumno al pie ──
+    const dataY = cy2 + ch + 16;
+    doc.setFillColor(27, 58, 45, 0.5);
+    doc.roundedRect(cx, dataY, cw, 28, 2, 2, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(200, 169, 110);
+    doc.text(s.name || '—', cx + cw / 2, dataY + 7, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(220, 220, 220);
+    doc.text(`CI: ${s.dni || '—'}`, cx + cw / 2, dataY + 13, { align: 'center' });
+    doc.text(`${s.course || '—'}`, cx + cw / 2, dataY + 18, { align: 'center' });
+    doc.text(`${s.schedule || '—'}`, cx + cw / 2, dataY + 23, { align: 'center' });
+
+    // ── Pie de página ──
+    doc.setFontSize(6);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`Emitido: ${new Date().toLocaleDateString('es-BO')} · ID: ${s.id}`, pw / 2, ph - 10, { align: 'center' });
+    doc.text('institutocean.edu.bo', pw / 2, ph - 6, { align: 'center' });
+
+    doc.save(`Carnet_${s.name?.replace(/\s+/g,'_') || s.dni}.pdf`);
+    showToast('ok', 'PDF generado', `Carnet de ${s.name}`);
+}
+
+// Renderiza una cara del carnet a canvas de alta resolución
+async function renderCarnetFaceToCanvas(face, student) {
+    // Escala para alta resolución (2x)
+    const SCALE = 3;
+    const W = Math.round(322 * SCALE);  // 85.6mm a 96dpi ×3
+    const H = Math.round(204 * SCALE);  // 54mm a 96dpi ×3
+    const c   = document.createElement('canvas');
+    c.width   = W; c.height = H;
+    const ctx = c.getContext('2d');
+    const s   = SCALE;
+
+    if (face === 'front') {
+        await drawCarnetFront(ctx, W, H, s, student);
+    } else {
+        await drawCarnetBack(ctx, W, H, s, student);
+    }
+    return c;
+}
+
+async function drawCarnetFront(ctx, W, H, s, student) {
+    const forest = '#1b3a2d', gold = '#c8a96e', goldL = '#e0c48a', white = '#ffffff';
+
+    // Fondo
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#0f2a1e'); bg.addColorStop(1, forest);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+    // Brillo esquina
+    const gl = ctx.createRadialGradient(W * .8, H * .1, 0, W * .8, H * .1, W * .4);
+    gl.addColorStop(0, 'rgba(200,169,110,.08)'); gl.addColorStop(1, 'transparent');
+    ctx.fillStyle = gl; ctx.fillRect(0, 0, W, H);
+
+    // Header strip
+    const hH = H * .28;
+    const hg = ctx.createLinearGradient(0, 0, W, 0);
+    hg.addColorStop(0, '#0a1f16'); hg.addColorStop(1, '#163022');
+    ctx.fillStyle = hg; ctx.fillRect(0, 0, W, hH);
+    ctx.fillStyle = 'rgba(200,169,110,.22)';
+    ctx.fillRect(0, hH - 1 * s, W, 1 * s);
+
+    // Logo icono
+    const lx = 14 * s, ly = 7 * s, ls = 22 * s, lr = 5 * s;
+    roundRectPath(ctx, lx, ly, ls, ls, lr);
+    ctx.fillStyle = gold; ctx.fill();
+    // Ícono graduación simplificado
+    ctx.strokeStyle = forest; ctx.lineWidth = 1.4 * s; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(lx + ls*.1, ly + ls*.5); ctx.lineTo(lx + ls*.5, ly + ls*.28); ctx.lineTo(lx + ls*.9, ly + ls*.5); ctx.lineTo(lx + ls*.5, ly + ls*.72); ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx + ls*.28, ly + ls*.55); ctx.lineTo(lx + ls*.28, ly + ls*.8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx + ls*.72, ly + ls*.55); ctx.lineTo(lx + ls*.72, ly + ls*.8); ctx.stroke();
+
+    // Org name
+    ctx.fillStyle = white;
+    ctx.font = `bold ${8 * s}px 'Georgia', serif`;
+    ctx.textBaseline = 'top';
+    ctx.fillText('Instituto CEAN', (lx + ls + 7 * s), ly + 2 * s);
+    ctx.fillStyle = gold;
+    ctx.font = `${5.5 * s}px Arial, sans-serif`;
+    ctx.fillText('SISTEMA DE ASISTENCIA', (lx + ls + 7 * s), ly + 13 * s);
+
+    // Foto
+    const px = 14 * s, py = hH + 8 * s, pw = 54 * s, ph = 68 * s, pr = 7 * s;
+    // Marco dorado
+    const gBorder = ctx.createLinearGradient(px - 2*s, py - 2*s, px + pw + 2*s, py + ph + 2*s);
+    gBorder.addColorStop(0, gold); gBorder.addColorStop(.5, goldL); gBorder.addColorStop(1, gold);
+    ctx.fillStyle = gBorder;
+    roundRectPath(ctx, px - 2.5*s, py - 2.5*s, pw + 5*s, ph + 5*s, pr + 2*s);
+    ctx.fill();
+
+    // Área foto
+    ctx.save();
+    roundRectPath(ctx, px, py, pw, ph, pr);
+    ctx.clip();
+    ctx.fillStyle = '#1f4535'; ctx.fillRect(px, py, pw, ph);
+
+    if (student.photo) {
+        try {
+            await new Promise((res, rej) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload  = () => { ctx.drawImage(img, px, py, pw, ph); res(); };
+                img.onerror = () => res(); // fallback a placeholder
+                img.src = student.photo;
+            });
+        } catch(e) {}
+    } else {
+        // Placeholder iniciales
+        const ini = (student.name || '?').split(' ').map(w => w[0] || '').join('').substring(0, 2).toUpperCase();
+        ctx.fillStyle = 'rgba(200,169,110,.4)';
+        ctx.font = `bold ${22 * s}px Georgia, serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(ini, px + pw / 2, py + ph / 2);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    }
+    ctx.restore();
+
+    // Badge estrella
+    const bx = px + pw - 8 * s, by = py + ph - 2 * s, bs = 14 * s, br2 = 4 * s;
+    roundRectPath(ctx, bx, by, bs, bs, br2);
+    ctx.fillStyle = gold; ctx.fill();
+    ctx.fillStyle = forest;
+    ctx.font = `bold ${8 * s}px Arial`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('★', bx + bs / 2, by + bs / 2);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+
+    // Datos a la derecha de la foto
+    const dx = px + pw + 12 * s, dw = W - dx - 10 * s;
+    const nameFull = (student.name || '—').toUpperCase();
+
+    // Rol
+    ctx.fillStyle = gold;
+    ctx.font = `600 ${5.5 * s}px Arial, sans-serif`;
+    ctx.letterSpacing = `${2 * s}px`;
+    ctx.fillText('ESTUDIANTE', dx, hH + 16 * s);
+    ctx.letterSpacing = '0px';
+
+    // Nombre
+    ctx.fillStyle = white;
+    let nfs = 12 * s;
+    ctx.font = `bold ${nfs}px 'Georgia', serif`;
+    while (ctx.measureText(nameFull).width > dw && nfs > 6 * s) {
+        nfs -= 0.5 * s; ctx.font = `bold ${nfs}px 'Georgia', serif`;
+    }
+    // Split si es muy largo
+    if (ctx.measureText(nameFull).width > dw) {
+        const parts = nameFull.split(' ');
+        const half  = Math.ceil(parts.length / 2);
+        ctx.font = `bold ${9 * s}px 'Georgia', serif`;
+        ctx.fillText(parts.slice(0, half).join(' '), dx, hH + 27 * s);
+        ctx.fillText(parts.slice(half).join(' '),    dx, hH + 38 * s);
+    } else {
+        ctx.fillText(nameFull, dx, hH + 30 * s);
+    }
+
+    // Curso
+    ctx.fillStyle = 'rgba(255,255,255,.42)';
+    ctx.font = `${6.5 * s}px Arial, sans-serif`;
+    ctx.fillText((student.course || '—').substring(0, 24), dx, hH + 44 * s);
+
+    // Separador
+    ctx.fillStyle = 'rgba(200,169,110,.25)';
+    ctx.fillRect(dx, hH + 48 * s, dw, 1 * s);
+
+    // CI
+    ctx.fillStyle = 'rgba(200,169,110,.55)';
+    ctx.font = `500 ${4.5 * s}px Arial, sans-serif`;
+    ctx.letterSpacing = `${1.5 * s}px`;
+    ctx.fillText('CI', dx, hH + 57 * s);
+    ctx.letterSpacing = '0px';
+    ctx.fillStyle = white;
+    ctx.font = `500 ${8 * s}px 'Courier New', monospace`;
+    ctx.fillText(student.dni || '—', dx, hH + 66 * s);
+
+    // Año
+    ctx.fillStyle = 'rgba(200,169,110,.55)';
+    ctx.font = `500 ${4.5 * s}px Arial, sans-serif`;
+    ctx.letterSpacing = `${1.5 * s}px`;
+    ctx.fillText('GESTIÓN', dx + dw * .5, hH + 57 * s);
+    ctx.letterSpacing = '0px';
+    ctx.fillStyle = white;
+    ctx.font = `500 ${8 * s}px 'Courier New', monospace`;
+    ctx.fillText(String(new Date().getFullYear()), dx + dw * .5, hH + 66 * s);
+
+    // Footer
+    const fy = H - 13 * s;
+    const fg = ctx.createLinearGradient(0, fy, W, fy);
+    fg.addColorStop(0, 'rgba(200,169,110,.1)'); fg.addColorStop(1, 'rgba(200,169,110,.04)');
+    ctx.fillStyle = fg; ctx.fillRect(0, fy, W, 13 * s);
+    ctx.fillStyle = 'rgba(200,169,110,.18)'; ctx.fillRect(0, fy, W, 0.8 * s);
+
+    ctx.fillStyle = 'rgba(255,255,255,.28)';
+    ctx.font = `${5 * s}px Arial, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.fillText('institutocean.edu.bo', 14 * s, fy + 9 * s);
+
+    // Pill "Vigente"
+    const vw = 42 * s, vx = W - vw - 10 * s, vy = fy + 4 * s, vh = 8 * s;
+    roundRectPath(ctx, vx, vy, vw, vh, 4 * s);
+    ctx.fillStyle = 'rgba(46,122,86,.45)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(46,122,86,.7)'; ctx.lineWidth = 0.8 * s; ctx.stroke();
+    ctx.fillStyle = '#7ed4a3';
+    ctx.font = `bold ${4.5 * s}px Arial`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('● VIGENTE', vx + vw / 2, vy + vh / 2);
+
+    // Corner marks
+    const cm = 9 * s, co = 8 * s;
+    ctx.strokeStyle = 'rgba(200,169,110,.28)'; ctx.lineWidth = 1.2 * s; ctx.lineCap = 'square';
+    [[co, co, 1, 0, 0, 1], [W-co, co, -1, 0, 0, 1], [co, H-co, 1, 0, 0, -1], [W-co, H-co, -1, 0, 0, -1]].forEach(([x, y, sx, sy, ex, ey]) => {
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + cm * sx, y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + cm * ey); ctx.stroke();
+    });
+}
+
+async function drawCarnetBack(ctx, W, H, s, student) {
+    const forest = '#1b3a2d', cream = '#f5f0e8', creamDk = '#e8e0d0', gold = '#c8a96e', ink = '#1a1a1a';
+
+    // Fondo crema
+    ctx.fillStyle = cream; ctx.fillRect(0, 0, W, H);
+
+    // Textura puntos
+    ctx.fillStyle = 'rgba(200,169,110,.045)';
+    for (let x = 15 * s; x < W; x += 20 * s)
+        for (let y = 15 * s; y < H; y += 20 * s)
+            { ctx.beginPath(); ctx.arc(x, y, 0.8 * s, 0, Math.PI * 2); ctx.fill(); }
+
+    // Barra top degradada
+    const bg = ctx.createLinearGradient(0, 0, W, 0);
+    bg.addColorStop(0, forest); bg.addColorStop(.5, '#2e7a56'); bg.addColorStop(1, forest);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, 5 * s);
+
+    // Nombre organización
+    ctx.textAlign = 'center';
+    ctx.fillStyle = forest;
+    ctx.font = `bold ${10 * s}px 'Georgia', serif`;
+    ctx.textBaseline = 'top';
+    ctx.fillText('Instituto CEAN', W / 2, 9 * s);
+    ctx.fillStyle = '#245c41';
+    ctx.font = `600 ${5 * s}px Arial`;
+    ctx.letterSpacing = `${1.5 * s}px`;
+    ctx.fillText('CARNET DE IDENTIFICACIÓN OFICIAL', W / 2, 21 * s);
+    ctx.letterSpacing = '0px';
+
+    // Línea separadora
+    ctx.fillStyle = creamDk; ctx.fillRect(14 * s, 28 * s, W - 28 * s, 1 * s);
+
+    // CI en caja
+    const bx = W / 2 - 44 * s, bw = 88 * s, by = 32 * s, bh = 22 * s;
+    ctx.fillStyle = 'rgba(200,169,110,.08)';
+    roundRectPath(ctx, bx, by, bw, bh, 4 * s); ctx.fill();
+    ctx.strokeStyle = creamDk; ctx.lineWidth = 0.8 * s;
+    roundRectPath(ctx, bx, by, bw, bh, 4 * s); ctx.stroke();
+
+    ctx.fillStyle = '#245c41';
+    ctx.font = `600 ${5 * s}px Arial`;
+    ctx.letterSpacing = `${2 * s}px`;
+    ctx.fillText('CARNET DE IDENTIDAD', W / 2, by + 6 * s);
+    ctx.letterSpacing = '0px';
+    ctx.fillStyle = ink;
+    ctx.font = `500 ${9 * s}px 'Courier New', monospace`;
+    ctx.letterSpacing = `${2 * s}px`;
+    ctx.fillText(student.dni || '—', W / 2, by + 17 * s);
+    ctx.letterSpacing = '0px';
+
+    // QR
+    const qrS = 62 * s, qrX = W / 2 - qrS / 2, qrY = 57 * s;
+    // Marco QR blanco
+    const qrPad = 5 * s;
+    roundRectPath(ctx, qrX - qrPad, qrY - qrPad, qrS + qrPad * 2, qrS + qrPad * 2, 6 * s);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.07)'; ctx.lineWidth = 0.8 * s;
+    roundRectPath(ctx, qrX - qrPad, qrY - qrPad, qrS + qrPad * 2, qrS + qrPad * 2, 6 * s); ctx.stroke();
+
+    // Dibujar QR real desde el DOM
+    const qrCanvas = document.querySelector('#cnQrCode canvas');
+    if (qrCanvas) {
+        ctx.drawImage(qrCanvas, qrX, qrY, qrS, qrS);
+    } else {
+        // Fallback: QR placeholder
+        ctx.fillStyle = '#eee'; ctx.fillRect(qrX, qrY, qrS, qrS);
+        ctx.fillStyle = '#999'; ctx.font = `${6 * s}px Arial`;
+        ctx.fillText('QR', qrX + qrS/2, qrY + qrS/2);
+    }
+
+    // Caption
+    ctx.fillStyle = '#5a5a5a';
+    ctx.font = `500 ${4.8 * s}px Arial`;
+    ctx.letterSpacing = `${1 * s}px`;
+    ctx.fillText('ESCANEAR PARA VERIFICAR', W / 2, qrY + qrS + qrPad + 8 * s);
+    ctx.letterSpacing = '0px';
+
+    // Línea separadora 2
+    ctx.fillStyle = creamDk; ctx.fillRect(14 * s, qrY + qrS + qrPad + 14 * s, W - 28 * s, 1 * s);
+
+    // ID sistema
+    const sidY = qrY + qrS + qrPad + 20 * s;
+    ctx.fillStyle = '#245c41';
+    ctx.font = `600 ${4.5 * s}px Arial`;
+    ctx.letterSpacing = `${2 * s}px`;
+    ctx.fillText('ID SISTEMA', W / 2, sidY);
+    ctx.letterSpacing = '0px';
+    ctx.fillStyle = '#888';
+    ctx.font = `400 ${5.5 * s}px 'Courier New', monospace`;
+    ctx.fillText((student.id || '—').substring(0, 22), W / 2, sidY + 9 * s);
+
+    // Footer barra verde
+    ctx.fillStyle = forest; ctx.fillRect(0, H - 14 * s, W, 14 * s);
+    ctx.fillStyle = 'rgba(255,255,255,.4)';
+    ctx.font = `400 ${5 * s}px Arial`;
+    ctx.fillText('institutocean.edu.bo', W / 2, H - 5 * s);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
 }
 
 async function downloadCarnetQR() {
