@@ -1236,6 +1236,49 @@ function downloadReport() {
 // Cache local de fotos (base64) para el modal
 const photoCache = {};
 
+// Descarga una foto de Google Drive usando el token de auth y la convierte a base64
+async function loadDrivePhotoAsBase64(driveUrl, studentId) {
+    try {
+        const token = getToken();
+        if (!token) return null;
+
+        // Extraer fileId de distintos formatos de URL de Drive:
+        // https://drive.google.com/uc?export=view&id=FILE_ID
+        // https://drive.google.com/file/d/FILE_ID/view
+        // https://lh3.googleusercontent.com/d/FILE_ID
+        let fileId = null;
+
+        const ucMatch  = driveUrl.match(/[?&]id=([^&]+)/);
+        const fdMatch  = driveUrl.match(/\/d\/([^/]+)/);
+        const lhMatch  = driveUrl.match(/\/d\/([^/?]+)/);
+
+        if (ucMatch)       fileId = ucMatch[1];
+        else if (fdMatch)  fileId = fdMatch[1];
+        else if (lhMatch)  fileId = lhMatch[1];
+
+        if (!fileId) return null;
+
+        // Usar Drive API v3 para descargar el contenido del archivo
+        const apiUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+        const r = await fetch(apiUrl, {
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+
+        if (!r.ok) return null;
+
+        const blob   = await r.blob();
+        const reader = new FileReader();
+        return await new Promise(resolve => {
+            reader.onload  = e => resolve(e.target.result);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+        });
+    } catch(e) {
+        console.warn('loadDrivePhotoAsBase64 error:', e);
+        return null;
+    }
+}
+
 function openQRModal(studentId) {
     const s = APP.db.students.find(s => s.id === studentId);
     if (!s) return;
@@ -1285,26 +1328,29 @@ function openQRModal(studentId) {
         APP.lastStudent.photo = src;
     }
 
+    function showPhotoLoading() {
+        placeholder.style.display = '';
+        placeholder.textContent   = '⏳';
+        placeholder.style.fontSize = '18px';
+    }
+
     if (cachedPhoto) {
         showPhoto(cachedPhoto);
     } else if (s.photoUrl && s.photoUrl.startsWith('http')) {
-        // Drive URL: intentar cargar vía proxy (blob) para evitar CORS en canvas
-        fetch(s.photoUrl)
-            .then(r => r.blob())
-            .then(blob => {
-                const reader = new FileReader();
-                reader.onload = e => {
-                    const b64 = e.target.result;
-                    photoCache[studentId]   = b64;
-                    APP.lastStudent.photo   = b64;
-                    showPhoto(b64);
-                };
-                reader.readAsDataURL(blob);
-            })
-            .catch(() => {
-                // Si falla el fetch, mostrar imagen directa (funciona en display pero no en canvas)
-                showPhoto(s.photoUrl);
-            });
+        // Mostrar indicador de carga mientras se descarga desde Drive
+        showPhotoLoading();
+        // Extraer el file ID de la URL de Drive y usar la API con auth token
+        loadDrivePhotoAsBase64(s.photoUrl, studentId).then(b64 => {
+            if (b64) {
+                photoCache[studentId]  = b64;
+                APP.lastStudent.photo  = b64;
+                showPhoto(b64);
+            } else {
+                // Resetear placeholder si falla
+                placeholder.textContent = initials;
+                placeholder.style.fontSize = '';
+            }
+        });
     }
 
     // Rellenar DORSO
@@ -1334,9 +1380,21 @@ function closeModal() {
 
 async function downloadCarnetPDF() {
     if (!APP.lastStudent) return;
-    showToast('info', 'Generando PDF...', 'Por favor espera un momento');
 
-    const s   = APP.lastStudent;
+    const s = APP.lastStudent;
+
+    // Si hay URL de Drive pero aún no tenemos base64, intentar cargarla ahora
+    if (!s.photo && s.photoUrl && s.photoUrl.startsWith('http')) {
+        showToast('info', 'Cargando foto...', 'Descargando imagen desde Drive');
+        const b64 = await loadDrivePhotoAsBase64(s.photoUrl, s.id);
+        if (b64) {
+            photoCache[s.id]  = b64;
+            s.photo           = b64;
+            APP.lastStudent.photo = b64;
+        }
+    }
+
+    showToast('info', 'Generando PDF...', 'Por favor espera un momento');
     const doc = new (window.jspdf.jsPDF)({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pw  = doc.internal.pageSize.getWidth();   // 210mm
     const ph  = doc.internal.pageSize.getHeight();  // 297mm
