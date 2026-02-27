@@ -178,6 +178,7 @@ async function restaurarSesion(session) {
         configurarUI(perm);
         populateCourseFilters();
         refreshAll();
+        startRealtimeSync();
 
         showToast('ok', `Bienvenido de nuevo, ${APP.currentUser.name}`, `Rol: ${perm.rol}`);
         return true;
@@ -242,6 +243,7 @@ function handleAuth() {
         configurarUI(perm);
         populateCourseFilters();
         refreshAll();
+        startRealtimeSync();
 
         showToast('ok', `Bienvenido, ${userName}`, `Rol: ${perm.rol}`);
     };
@@ -297,6 +299,7 @@ function configurarUI(perm) {
 // ─── CERRAR SESIÓN ───────────────────────────────────────────
 function handleSignout() {
     stopScanner();
+    stopRealtimeSync();
     clearSession();
     try {
         const token = gapi.client.getToken();
@@ -692,6 +695,30 @@ async function startScanner() {
     `;
 }
 
+// ─── DETECCIÓN DE PANTALLA NEGRA ─────────────────────────────
+function detectBlackScreen(videoEl, timeoutMs = 3000) {
+    return new Promise(resolve => {
+        const start = Date.now();
+        function check() {
+            try {
+                if (!videoEl || !videoEl.videoWidth) {
+                    if (Date.now() - start < timeoutMs) { setTimeout(check, 200); return; }
+                    return resolve(false); // sin datos aún, no conclusivo
+                }
+                const c = document.createElement('canvas');
+                c.width = 32; c.height = 32;
+                const ctx = c.getContext('2d');
+                ctx.drawImage(videoEl, 0, 0, 32, 32);
+                const d = ctx.getImageData(0, 0, 32, 32).data;
+                let total = 0;
+                for (let i = 0; i < d.length; i += 4) total += d[i] + d[i+1] + d[i+2];
+                resolve(total > 500); // true = hay imagen real
+            } catch(e) { resolve(false); }
+        }
+        setTimeout(check, 1200);
+    });
+}
+
 async function initCamera() {
     const btnStart  = document.getElementById('btnStartCam');
     const btnStop   = document.getElementById('btnStopCam');
@@ -700,45 +727,147 @@ async function initCamera() {
 
     if (btnStart) { btnStart.textContent = '⏳  Iniciando cámara...'; btnStart.disabled = true; }
 
-    // Detener escáner previo
+    // Mostrar spinner visual mientras inicia
+    if (preview) {
+        const existingMsg = preview.querySelector('#scannerMsg');
+        if (existingMsg) {
+            existingMsg.innerHTML = `<div class="cam-checking"><div class="cam-spinner"></div><span>Buscando cámara...</span></div>`;
+        }
+    }
     if (html5QrCode) {
         try { await html5QrCode.stop(); await html5QrCode.clear(); } catch(e) {}
         html5QrCode = null;
     }
 
+    // Limpiar mensaje inicial
+    if (msg) msg.remove();
+
+    // Estrategias de constraints para máxima compatibilidad
+    const constraintStrategies = [
+        { facingMode: { ideal: 'environment' } },  // cámara trasera ideal
+        { facingMode: 'environment' },              // cámara trasera estricta
+        { facingMode: 'user' },                     // cámara frontal
+        {}                                          // cualquier cámara
+    ];
+
+    const w = preview ? Math.min((preview.offsetWidth || 320) - 40, 260) : 220;
+
+    // Intentar primero con getUserMedia directo para verificar permisos
+    let permOk = false;
+    try {
+        const testStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        testStream.getTracks().forEach(t => t.stop());
+        permOk = true;
+    } catch(permErr) {
+        const msg2 = (permErr?.message || '').toLowerCase();
+        if (msg2.includes('permission') || msg2.includes('denied') || msg2.includes('notallowed')) {
+            showCamError('🔒 Permiso de cámara denegado.\n\nVe a Ajustes del navegador → Permisos del sitio → Cámara → Permitir.\nLuego recarga la página.');
+            if (btnStart) { btnStart.textContent = '📷  Intentar de nuevo'; btnStart.disabled = false; }
+            return;
+        }
+    }
+
+    let started = false;
+    let lastErr = null;
+
     try {
         const cameras = await Html5Qrcode.getCameras();
         if (!cameras || cameras.length === 0) {
             showCamError('No se encontró ninguna cámara. Verifica que el dispositivo tenga cámara.');
-            if (btnStart) { btnStart.textContent = '📷  Iniciar Cámara'; btnStart.disabled = false; }
+            if (btnStart) { btnStart.textContent = '📷  Intentar de nuevo'; btnStart.disabled = false; }
             return;
         }
 
-        // Preferir cámara trasera
-        const cam = cameras.find(c => /back|rear|environment|trasera/i.test(c.label))
-                 || cameras[cameras.length - 1];
+        // Ordenar: cámara trasera primero
+        const sorted = [...cameras].sort((a, b) => {
+            const aBack = /back|rear|environment|trasera|0/i.test(a.label);
+            const bBack = /back|rear|environment|trasera|0/i.test(b.label);
+            return bBack - aBack;
+        });
 
-        // Crear elemento para el video
-        if (msg) msg.remove();
+        for (const cam of sorted) {
+            if (started) break;
+            html5QrCode = new Html5Qrcode('scannerPreview');
+            try {
+                await html5QrCode.start(
+                    cam.id,
+                    {
+                        fps: 10,
+                        qrbox: { width: w, height: w },
+                        aspectRatio: 1.333,
+                        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+                    },
+                    (decoded) => onScanSuccess(decoded),
+                    () => {}
+                );
 
-        html5QrCode = new Html5Qrcode('scannerPreview');
+                // Verificar pantalla negra
+                const videoEl = document.querySelector('#scannerPreview video');
+                const hasImage = await detectBlackScreen(videoEl, 3500);
 
-        const w = preview ? Math.min(preview.offsetWidth - 40, 260) : 220;
+                if (!hasImage) {
+                    // Pantalla negra detectada → intentar siguiente cámara
+                    console.warn('Pantalla negra detectada en', cam.label, '— probando siguiente...');
+                    try { await html5QrCode.stop(); await html5QrCode.clear(); } catch(e) {}
+                    html5QrCode = null;
+                    continue;
+                }
 
-        await html5QrCode.start(
-            cam.id,
-            {
-                fps: 12,
-                qrbox: { width: w, height: w },
-                aspectRatio: 1.333,
-                experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-            },
-            (decoded) => onScanSuccess(decoded),
-            () => {}  // silencioso en el frame scanning
-        );
+                started = true;
+            } catch(e) {
+                lastErr = e;
+                try { await html5QrCode.stop(); await html5QrCode.clear(); } catch(ee) {}
+                html5QrCode = null;
+            }
+        }
 
-        if (btnStart) btnStart.style.display = 'none';
-        if (btnStop)  btnStop.style.display  = 'flex';
+        // Si con IDs de cámara no funcionó, intentar con facingMode constraints
+        if (!started) {
+            for (const constraint of constraintStrategies) {
+                if (started) break;
+                html5QrCode = new Html5Qrcode('scannerPreview');
+                try {
+                    await html5QrCode.start(
+                        { facingMode: constraint.facingMode || 'environment' },
+                        {
+                            fps: 10,
+                            qrbox: { width: w, height: w },
+                            aspectRatio: 1.333,
+                            experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+                        },
+                        (decoded) => onScanSuccess(decoded),
+                        () => {}
+                    );
+
+                    const videoEl = document.querySelector('#scannerPreview video');
+                    const hasImage = await detectBlackScreen(videoEl, 3000);
+
+                    if (hasImage) {
+                        started = true;
+                    } else {
+                        try { await html5QrCode.stop(); await html5QrCode.clear(); } catch(e) {}
+                        html5QrCode = null;
+                    }
+                } catch(e) {
+                    lastErr = e;
+                    try { await html5QrCode.stop(); await html5QrCode.clear(); } catch(ee) {}
+                    html5QrCode = null;
+                }
+            }
+        }
+
+        if (started) {
+            if (btnStart) btnStart.style.display = 'none';
+            if (btnStop)  btnStop.style.display  = 'flex';
+        } else {
+            const msg2 = (lastErr?.message || lastErr?.toString() || '').toLowerCase();
+            let texto = 'No se pudo iniciar la cámara. Intenta recargar la página.';
+            if (msg2.includes('notfound') || msg2.includes('devicenotfound')) {
+                texto = 'No se encontró cámara disponible en este dispositivo.';
+            }
+            showCamError(texto);
+            if (btnStart) { btnStart.textContent = '📷  Intentar de nuevo'; btnStart.disabled = false; }
+        }
 
     } catch(err) {
         console.error('initCamera error:', err);
@@ -848,6 +977,35 @@ function renderPermisos() {
         </tr>`).join('');
 }
 
+// ─── DOM DIFF — actualiza sin parpadeo ───────────────────────
+// Actualiza el innerHTML de un contenedor solo si cambió
+function patchHTML(el, newHtml) {
+    if (!el) return;
+    if (el.innerHTML === newHtml) return; // sin cambios → no tocar DOM
+    // Si el contenido es una lista de filas, actualizar fila a fila
+    const tmp = document.createElement('div');
+    tmp.innerHTML = newHtml;
+    const newNodes = Array.from(tmp.children);
+    const oldNodes = Array.from(el.children);
+
+    if (newNodes.length === 0) { el.innerHTML = newHtml; return; }
+
+    // Agregar/actualizar nodos
+    newNodes.forEach((newNode, i) => {
+        if (i < oldNodes.length) {
+            if (oldNodes[i].outerHTML !== newNode.outerHTML) {
+                el.replaceChild(newNode.cloneNode(true), oldNodes[i]);
+            }
+        } else {
+            el.appendChild(newNode.cloneNode(true));
+        }
+    });
+    // Remover nodos extra
+    while (el.children.length > newNodes.length) {
+        el.removeChild(el.lastChild);
+    }
+}
+
 // ─── RENDER GENERAL ──────────────────────────────────────────
 function refreshAll() {
     renderRecentRegistrations();
@@ -863,8 +1021,8 @@ function renderRecentRegistrations() {
     const list = [...APP.db.students].reverse().slice(0,5);
     const c = document.getElementById('recentList');
     if (!c) return;
-    if (!list.length) { c.innerHTML='<p class="empty-msg">No hay registros todavía</p>'; return; }
-    c.innerHTML = list.map(s => `
+    if (!list.length) { patchHTML(c, '<p class="empty-msg">No hay registros todavía</p>'); return; }
+    const html = list.map(s => `
         <div class="list-row">
             <div class="cell-name">
                 <div class="avatar" style="background:${getAvatarColor(s.name)}">${getInitials(s.name)}</div>
@@ -875,6 +1033,7 @@ function renderRecentRegistrations() {
                 <button class="btn btn-blue btn-sm" onclick="openQRModal('${s.id}')">📱 QR</button>
             </div>
         </div>`).join('');
+    patchHTML(c, html);
 }
 
 function renderStudentsTable() {
@@ -885,8 +1044,8 @@ function renderStudentsTable() {
     );
     const tbody = document.getElementById('studentsBody');
     if (!tbody) return;
-    if (!list.length) { tbody.innerHTML='<tr><td colspan="6" class="empty-msg">Sin estudiantes</td></tr>'; return; }
-    tbody.innerHTML = list.map(s => {
+    if (!list.length) { patchHTML(tbody, '<tr><td colspan="6" class="empty-msg">Sin estudiantes</td></tr>'); return; }
+    const html = list.map(s => {
         const ok = APP.db.attendance.find(a => a.sid===s.id && a.date===today && a.type===CONFIG.TIPOS.ENTRADA);
         return `<tr>
             <td><div class="cell-name">
@@ -900,6 +1059,7 @@ function renderStudentsTable() {
             <td><button class="btn btn-blue btn-sm" onclick="openQRModal('${s.id}')">📱</button></td>
         </tr>`;
     }).join('');
+    patchHTML(tbody, html);
 }
 
 function renderTodayLog() {
@@ -908,8 +1068,8 @@ function renderTodayLog() {
     ['todayLog','todayLog2'].forEach(id => {
         const c = document.getElementById(id);
         if (!c) return;
-        if (!log.length) { c.innerHTML='<p class="empty-msg">Esperando lecturas de QR...</p>'; return; }
-        c.innerHTML = log.map(a => {
+        if (!log.length) { patchHTML(c, '<p class="empty-msg">Esperando lecturas de QR...</p>'); return; }
+        const html = log.map(a => {
             const ent = a.type===CONFIG.TIPOS.ENTRADA;
             return `<div class="list-row">
                 <div class="cell-name">
@@ -922,6 +1082,7 @@ function renderTodayLog() {
                 </div>
             </div>`;
         }).join('');
+        patchHTML(c, html);
     });
 }
 
@@ -1280,6 +1441,75 @@ function updateScanModeStyles() {
     document.querySelectorAll('.scan-mode-selector label').forEach(l=>l.classList.remove('mode-active-entrada','mode-active-salida'));
     if (sel==='ENTRADA') document.querySelector('.mode-entrada')?.classList.add('mode-active-entrada');
     else document.querySelector('.mode-salida')?.classList.add('mode-active-salida');
+}
+
+// ─── SINCRONIZACIÓN EN TIEMPO REAL ───────────────────────────
+let realtimeTimer = null;
+let lastStudentCount = 0;
+let lastAttendanceCount = 0;
+let isSyncing = false;
+
+async function realtimeSync() {
+    if (!APP.authed || !APP.currentUser || isSyncing) return;
+    isSyncing = true;
+    try {
+        // Solo cargar estudiantes y asistencia (las tablas que cambian frecuente)
+        let changed = false;
+
+        try {
+            const rows = await sheetsGet(CONFIG.RANGES.ESTUDIANTES);
+            const newStudents = rows.map(r => ({
+                id:r[0]||'', name:r[1]||'', dni:r[2]||'', email:r[3]||'',
+                phone:r[4]||'', course:r[5]||'', schedule:r[6]||'',
+                photoUrl:r[7]||'', qrUrl:r[8]||'', createdAt:r[9]||'', registeredBy:r[10]||''
+            }));
+            if (newStudents.length !== lastStudentCount) {
+                APP.db.students = newStudents;
+                lastStudentCount = newStudents.length;
+                changed = true;
+            }
+        } catch(e) { /* mantener datos locales si falla */ }
+
+        try {
+            const rows = await sheetsGet(CONFIG.RANGES.ASISTENCIA);
+            const newAtt = rows.map(r => ({
+                sid:r[0]||'', name:r[1]||'', dni:r[2]||'', course:r[3]||'',
+                schedule:r[4]||'', date:r[5]||'', time:r[6]||'', type:r[7]||'', registeredBy:r[8]||''
+            }));
+            if (newAtt.length !== lastAttendanceCount) {
+                APP.db.attendance = newAtt;
+                lastAttendanceCount = newAtt.length;
+                changed = true;
+            }
+        } catch(e) {}
+
+        if (changed) {
+            saveLocal();
+            // Actualizar UI sin parpadeo (patchHTML)
+            renderRecentRegistrations();
+            renderStudentsTable();
+            renderAttendanceStats();
+            renderTodayLog();
+            populateCourseFilters();
+            syncStatus('ok', '✅ Actualizado');
+        }
+    } catch(e) {
+        console.warn('realtimeSync error:', e);
+    }
+    isSyncing = false;
+}
+
+function startRealtimeSync(intervalMs = 20000) {
+    stopRealtimeSync();
+    lastStudentCount = APP.db.students.length;
+    lastAttendanceCount = APP.db.attendance.length;
+    // Primera sync a los 5 segundos, luego cada `intervalMs`
+    realtimeTimer = setInterval(realtimeSync, intervalMs);
+    setTimeout(realtimeSync, 5000);
+}
+
+function stopRealtimeSync() {
+    if (realtimeTimer) { clearInterval(realtimeTimer); realtimeTimer = null; }
 }
 
 // ─── INIT ────────────────────────────────────────────────────
