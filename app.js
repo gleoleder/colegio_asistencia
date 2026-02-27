@@ -90,13 +90,54 @@ function checkReady() {
 }
 function handleAuth() {
     APP.tokenClient.callback = async (resp) => {
-        if (resp.error) return;
+        if (resp.error) {
+            console.error('Error en OAuth:', resp);
+            return;
+        }
         APP.authed = true;
-        // Get user info
+
+        // Obtener info del usuario — intentar varias formas
         try {
-            const profile = await gapi.client.request({ path: 'https://www.googleapis.com/oauth2/v3/userinfo' });
-            APP.currentUser = { email: profile.result.email, name: profile.result.name };
-        } catch(e) { APP.currentUser = { email: 'usuario@gmail.com', name: 'Usuario' }; }
+            // Forma 1: userinfo endpoint
+            const profile = await gapi.client.request({
+                path: 'https://www.googleapis.com/oauth2/v3/userinfo'
+            });
+            APP.currentUser = {
+                email: profile.result.email,
+                name:  profile.result.name || profile.result.email
+            };
+        } catch(e) {
+            try {
+                // Forma 2: decodificar el JWT del token de credencial de Google
+                const credential = resp.credential;
+                if (credential) {
+                    const payload = JSON.parse(atob(credential.split('.')[1]));
+                    APP.currentUser = { email: payload.email, name: payload.name || payload.email };
+                } else {
+                    // Forma 3: pedir el token actual y decodificarlo
+                    const token = gapi.client.getToken();
+                    if (token && token.id_token) {
+                        const payload = JSON.parse(atob(token.id_token.split('.')[1]));
+                        APP.currentUser = { email: payload.email, name: payload.name || payload.email };
+                    } else {
+                        // Forma 4: segunda llamada directa con fetch
+                        const accessToken = gapi.client.getToken().access_token;
+                        const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                            headers: { Authorization: 'Bearer ' + accessToken }
+                        });
+                        const data = await res.json();
+                        APP.currentUser = { email: data.email, name: data.name || data.email };
+                    }
+                }
+            } catch(e2) {
+                console.error('No se pudo obtener el email del usuario:', e2);
+                showToast('bad', 'Error de autenticación', 'No se pudo obtener tu correo de Google. Intenta de nuevo.');
+                handleSignout();
+                return;
+            }
+        }
+
+        console.log('Usuario autenticado:', APP.currentUser);
 
         document.getElementById('authBtn').style.display = 'none';
         document.getElementById('logoutBtn').style.display = 'inline-flex';
