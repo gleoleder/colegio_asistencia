@@ -504,7 +504,15 @@ async function doRegister(event) {
     document.getElementById('qrActions').classList.add('visible');
     APP.lastStudent = { ...student, photo: APP.currentPhoto, photoUrl: APP.currentPhoto||'' };
     // Guardar foto en cache para el modal
-    if (APP.currentPhoto) cacheStudentPhoto(student.id, APP.currentPhoto);
+    if (APP.currentPhoto) {
+        cacheStudentPhoto(student.id, APP.currentPhoto);
+    } else {
+        // Si no tiene foto, generar placeholder de avatar para el carnet
+        const initials  = student.name.split(' ').map(w=>w[0]||'').join('').substring(0,2).toUpperCase();
+        const avatarB64 = generateAvatarCanvas(initials, getAvatarColor(student.name));
+        cacheStudentPhoto(student.id, avatarB64);
+        APP.lastStudent.photo = avatarB64;
+    }
 
     await new Promise(r => setTimeout(r, 500));
 
@@ -1231,6 +1239,74 @@ function downloadReport() {
     showToast('ok','Reporte generado','PDF descargado');
 }
 
+// ─── HELPERS DE FOTO ─────────────────────────────────────────
+
+// Genera un canvas con iniciales + fondo de color como avatar profesional
+function generateAvatarCanvas(initials, bgColor) {
+    const SIZE = 300;
+    const c   = document.createElement('canvas');
+    c.width   = SIZE; c.height = SIZE;
+    const ctx = c.getContext('2d');
+
+    // Fondo degradado con el color del avatar
+    const grad = ctx.createLinearGradient(0, 0, SIZE, SIZE);
+    // Aclarar y oscurecer el color base
+    grad.addColorStop(0, adjustColor(bgColor, 30));
+    grad.addColorStop(1, adjustColor(bgColor, -30));
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    // Patrón sutil
+    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    for (let i = 0; i < SIZE; i += 20) {
+        ctx.fillRect(i, 0, 1, SIZE);
+        ctx.fillRect(0, i, SIZE, 1);
+    }
+
+    // Círculo tenue de fondo
+    const radGrad = ctx.createRadialGradient(SIZE/2, SIZE/2, SIZE*.1, SIZE/2, SIZE/2, SIZE*.6);
+    radGrad.addColorStop(0, 'rgba(255,255,255,.12)');
+    radGrad.addColorStop(1, 'transparent');
+    ctx.fillStyle = radGrad;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    // Iniciales
+    ctx.fillStyle = 'rgba(255,255,255,.92)';
+    ctx.font      = `bold ${SIZE * .36}px Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Sombra suave
+    ctx.shadowColor   = 'rgba(0,0,0,.25)';
+    ctx.shadowBlur    = SIZE * .04;
+    ctx.shadowOffsetY = SIZE * .02;
+    ctx.fillText(initials, SIZE / 2, SIZE / 2);
+    ctx.shadowColor = 'transparent';
+
+    return c.toDataURL('image/jpeg', .92);
+}
+
+// Ajusta brillo de un color hex
+function adjustColor(hex, amount) {
+    const num = parseInt(hex.replace('#',''), 16);
+    const r   = Math.min(255, Math.max(0, (num >> 16) + amount));
+    const g   = Math.min(255, Math.max(0, ((num >> 8) & 0xff) + amount));
+    const b   = Math.min(255, Math.max(0, (num & 0xff) + amount));
+    return `rgb(${r},${g},${b})`;
+}
+
+// Inserta una imagen en el contenedor de foto del carnet
+function setPhotoSrc(container, src) {
+    let img = container.querySelector('img');
+    if (!img) {
+        img = document.createElement('img');
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center top;display:block;border-radius:8px;';
+        container.style.position = 'relative';
+        container.appendChild(img);
+    }
+    img.src = src;
+    img.style.display = 'block';
+}
+
 // ─── MODAL CARNET 3D ─────────────────────────────────────────
 
 // Cache local de fotos (base64) para el modal
@@ -1300,56 +1376,35 @@ function openQRModal(studentId) {
     document.getElementById('cnYear').textContent     = new Date().getFullYear();
     document.getElementById('cnSchedule').textContent = s.schedule || '—';
 
-    // Foto: cargar y mostrar
+    // ── FOTO ──────────────────────────────────────────────────
     const photoInner  = document.getElementById('cnPhotoInner');
     const placeholder = document.getElementById('cnInitials');
 
     // Limpiar estado anterior
     let existingImg = photoInner.querySelector('img');
-    placeholder.style.display = '';
-    placeholder.textContent   = initials;
-    if (existingImg) { existingImg.style.display = 'none'; }
+    if (existingImg) existingImg.remove();
+    placeholder.style.display = 'none';
 
-    function showPhoto(src) {
-        placeholder.style.display = 'none';
-        if (!existingImg) {
-            existingImg = document.createElement('img');
-            existingImg.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center top;position:absolute;inset:0;border-radius:8px;';
-            photoInner.style.position = 'relative';
-            photoInner.appendChild(existingImg);
-        }
-        existingImg.style.display = 'block';
-        existingImg.src = src;
-        existingImg.onerror = () => {
-            existingImg.style.display = 'none';
-            placeholder.style.display = '';
-        };
-        // También guardar en lastStudent para el PDF
-        APP.lastStudent.photo = src;
-    }
+    // Generar siempre un placeholder canvas como base (iniciales + color)
+    const placeholderB64 = generateAvatarCanvas(initials, getAvatarColor(s.name));
+    APP.lastStudent.photo = placeholderB64; // fallback para PDF
 
-    function showPhotoLoading() {
-        placeholder.style.display = '';
-        placeholder.textContent   = '⏳';
-        placeholder.style.fontSize = '18px';
-    }
+    // Mostrar placeholder inmediatamente
+    setPhotoSrc(photoInner, placeholderB64);
 
+    // Intentar cargar foto real en segundo plano (sin bloquear)
     if (cachedPhoto) {
-        showPhoto(cachedPhoto);
+        setPhotoSrc(photoInner, cachedPhoto);
+        APP.lastStudent.photo = cachedPhoto;
     } else if (s.photoUrl && s.photoUrl.startsWith('http')) {
-        // Mostrar indicador de carga mientras se descarga desde Drive
-        showPhotoLoading();
-        // Extraer el file ID de la URL de Drive y usar la API con auth token
+        // Intentar con auth token, sin bloquear la UI
         loadDrivePhotoAsBase64(s.photoUrl, studentId).then(b64 => {
             if (b64) {
                 photoCache[studentId]  = b64;
                 APP.lastStudent.photo  = b64;
-                showPhoto(b64);
-            } else {
-                // Resetear placeholder si falla
-                placeholder.textContent = initials;
-                placeholder.style.fontSize = '';
+                setPhotoSrc(photoInner, b64);
             }
+            // Si falla, el placeholder ya está visible — no hacer nada
         });
     }
 
