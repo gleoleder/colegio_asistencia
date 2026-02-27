@@ -112,6 +112,7 @@ function handleSignout() {
     if (token) { google.accounts.oauth2.revoke(token.access_token); gapi.client.setToken(''); }
     APP.authed = false;
     APP.currentUser = null;
+    APP.db.permisos = [];
     document.getElementById('authBtn').style.display = 'inline-flex';
     document.getElementById('logoutBtn').style.display = 'none';
     document.getElementById('userBadge').style.display = 'none';
@@ -122,20 +123,22 @@ function handleSignout() {
 // ─── PERMISOS / ROLES ────────────────────────────────────────
 function checkUserPermission() {
     if (!APP.currentUser) return;
-    const email = APP.currentUser.email.toLowerCase().trim();
+    const email = (APP.currentUser.email || '').toLowerCase().trim();
 
-    console.log('🔐 Verificando acceso para:', email);
-    console.log('📋 Permisos disponibles:', APP.db.permisos);
+    console.log('Verificando permiso para:', email);
+    console.log('Lista de permisos en memoria:', APP.db.permisos);
 
     const perm = APP.db.permisos.find(p =>
         (p.email || '').toLowerCase().trim() === email
     );
 
     if (!perm) {
-        // Sin permiso registrado — acceso denegado
-        const listaEmails = APP.db.permisos.map(p => p.email).join(', ') || '(lista vacía)';
-        console.warn(`❌ Acceso denegado. Email buscado: "${email}". Permisos en hoja: ${listaEmails}`);
-        showToast('bad', 'Acceso denegado', `"${email}" no tiene permisos. Verifica que el correo esté exactamente así en la hoja Permisos.`);
+        const lista = APP.db.permisos.length
+            ? APP.db.permisos.map(p => '"' + p.email + '"').join(', ')
+            : '(lista vacía — revisa que la hoja Permisos tenga datos desde la fila 2)';
+        console.warn(`Acceso denegado. Email: "${email}". Permisos en hoja: ${lista}`);
+        showToast('bad', 'Acceso denegado',
+            `"${email}" no está en la hoja Permisos. Revisa la consola (F12) para más detalles.`);
         handleSignout();
         return;
     }
@@ -158,14 +161,13 @@ function checkUserPermission() {
 
 function updateNavByRole(role) {
     document.querySelectorAll('.nav-btn').forEach(btn => {
-        if (!role) { btn.style.display = 'none'; return; }
+        if (!role) {
+            btn.style.display = 'none';
+            return;
+        }
         const allowed = (btn.dataset.role || '').split(',');
         btn.style.display = allowed.includes(role) ? 'flex' : 'none';
     });
-    // Si no hay rol, mostrar todos (modo sin login)
-    if (!role) {
-        document.querySelectorAll('.nav-btn').forEach(btn => btn.style.display = 'flex');
-    }
 }
 
 // ─── GESTIÓN DE PERMISOS ─────────────────────────────────────
@@ -256,16 +258,17 @@ function saveLocal() { localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(A
 function loadLocal() {
     const saved = localStorage.getItem(CONFIG.STORAGE_KEY);
     if (saved) {
-        const parsed = JSON.parse(saved);
-        // Los permisos NO se restauran desde localStorage para evitar
-        // que datos desactualizados bloqueen el acceso al sistema.
-        // Siempre se cargan frescos desde Google Sheets al iniciar sesión.
-        APP.db.students   = parsed.students   || [];
-        APP.db.attendance = parsed.attendance || [];
-        APP.db.courses    = parsed.courses    || [];
-        APP.db.schedules  = parsed.schedules  || [];
-        APP.db.permisos   = []; // siempre vacío hasta que cargue Sheets
-        refreshAll();
+        try {
+            const parsed = JSON.parse(saved);
+            // Los permisos NUNCA se restauran desde localStorage:
+            // siempre se cargan frescos desde Google Sheets al iniciar sesion.
+            APP.db.students   = parsed.students   || [];
+            APP.db.attendance = parsed.attendance || [];
+            APP.db.courses    = parsed.courses    || [];
+            APP.db.schedules  = parsed.schedules  || [];
+            APP.db.permisos   = [];
+            refreshAll();
+        } catch(e) { console.warn('Error leyendo localStorage:', e); }
     }
 }
 
@@ -310,7 +313,7 @@ async function loadFromSheets() {
                     description: r[4] || ''
                 }));
             }
-        } catch(e) { console.warn('Error cargando Cursos:', e); }
+        } catch(e) {}
 
         // Horarios
         try {
@@ -323,10 +326,9 @@ async function loadFromSheets() {
                     startTime: r[3], endTime: r[4], room: r[5] || ''
                 }));
             }
-        } catch(e) { console.warn('Error cargando Horarios:', e); }
+        } catch(e) {}
 
-        // ── PERMISOS — carga directa desde Sheets, ignorando localStorage ──
-        // Se limpia primero para evitar que datos viejos bloqueen el acceso
+        // Permisos — siempre limpiar primero y cargar frescos
         APP.db.permisos = [];
         try {
             const resPerms = await gapi.client.sheets.spreadsheets.values.get({
@@ -334,15 +336,17 @@ async function loadFromSheets() {
             });
             if (resPerms.result.values) {
                 APP.db.permisos = resPerms.result.values
-                    .filter(r => r[0] && r[0].toString().trim() !== '') // ignorar filas vacías
+                    .filter(r => r[0] && r[0].toString().trim() !== '')
                     .map(r => ({
                         email:  r[0].toString().trim().toLowerCase(),
                         nombre: (r[1] || '').toString().trim(),
                         rol:    (r[2] || CONFIG.ROLES.VIEWER).toString().trim().toUpperCase()
                     }));
             }
-            console.log('✅ Permisos cargados:', APP.db.permisos);
-        } catch(e) { console.error('❌ Error cargando Permisos:', e); }
+            console.log('Permisos cargados desde Sheets:', APP.db.permisos);
+        } catch(e) {
+            console.error('Error cargando Permisos desde Sheets:', e);
+        }
 
         saveLocal();
         refreshAll();
