@@ -5,71 +5,70 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#1b2e4a">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Sistema de Asistencia QR — Instituto CEAN</title>
 
-    <!-- Librerías externas -->
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script async defer src="https://apis.google.com/js/api.js" onload="onGapiLoad()"></script>
     <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoad()"></script>
 
-    <!-- Tipografías -->
     <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
-    <!-- Estilos propios -->
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-    <!-- ═══════════════════════════════════════
-         ENCABEZADO
-    ═══════════════════════════════════════ -->
+    <!-- ENCABEZADO -->
     <header class="header">
         <div class="logo">
-            <div class="logo-icon">🎓</div>
+            <div class="logo-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/>
+                </svg>
+            </div>
             <div>
                 <h1>Instituto CEAN</h1>
-                <small>Asistencia</small>
+                <small>Sistema de Asistencia</small>
             </div>
         </div>
         <div class="header-right">
             <div class="chip chip-g" id="syncChip">⏳ Cargando...</div>
+            <div class="user-badge" id="userBadge" style="display:none">
+                <div class="user-avatar" id="userAvatar">?</div>
+                <span id="userEmail"></span>
+                <span class="role-tag" id="userRole"></span>
+            </div>
             <button class="btn-auth" id="authBtn"   onclick="handleAuth()"    style="display:none">🔑 Conectar Google</button>
-            <button class="btn-auth" id="logoutBtn" onclick="handleSignout()" style="display:none">Cerrar sesión</button>
+            <button class="btn-auth btn-auth-out" id="logoutBtn" onclick="handleSignout()" style="display:none">Salir</button>
         </div>
     </header>
 
-    <!-- ═══════════════════════════════════════
-         NAVEGACIÓN
-    ═══════════════════════════════════════ -->
+    <!-- NAVEGACIÓN -->
     <nav class="nav" id="navBar">
-        <button class="nav-btn active" data-panel="register" >📝 Registrar</button>
-        <button class="nav-btn"        data-panel="scanner"  >📷 Escanear</button>
-        <button class="nav-btn"        data-panel="students" >👥 Alumnos</button>
-        <button class="nav-btn"        data-panel="attendance">📊 Asistencia</button>
-        <button class="nav-btn"        data-panel="reports"  >📋 Reportes</button>
+        <button class="nav-btn active" data-panel="register"  data-role="ADMIN,REGISTRO">📝 Registrar</button>
+        <button class="nav-btn"        data-panel="scanner"   data-role="ADMIN,SCANNER">📷 Escanear</button>
+        <button class="nav-btn"        data-panel="students"  data-role="ADMIN,VIEWER,SCANNER,REGISTRO">👥 Estudiantes</button>
+        <button class="nav-btn"        data-panel="attendance" data-role="ADMIN,VIEWER,SCANNER">📊 Asistencia</button>
+        <button class="nav-btn"        data-panel="reports"   data-role="ADMIN,VIEWER">📋 Reportes</button>
+        <button class="nav-btn"        data-panel="permisos"  data-role="ADMIN">🔐 Permisos</button>
     </nav>
 
-    <!-- ═══════════════════════════════════════
-         CONTENIDO PRINCIPAL
-    ═══════════════════════════════════════ -->
     <main class="main">
 
         <!-- ─── PANEL: REGISTRAR ─── -->
         <section id="panel-register" class="panel active">
             <div class="card">
-                <div class="card-title">📋 Registrar Nuevo Alumno</div>
+                <div class="card-title">📋 Registrar Nuevo Estudiante</div>
                 <form id="regForm" onsubmit="doRegister(event)">
                     <div class="form-grid">
                         <div class="field full">
-                            <label>Foto del alumno</label>
+                            <label>Foto del estudiante</label>
                             <div class="photo-row">
                                 <div class="photo-circle" id="photoCircle"
-                                     onclick="document.getElementById('photoFile').click()">📷</div>
-                                <input type="file" id="photoFile" accept="image/*"
-                                       style="display:none" onchange="loadPhoto(this)">
+                                     onclick="document.getElementById('photoFile').click()">
+                                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8c95a3" stroke-width="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                                </div>
+                                <input type="file" id="photoFile" accept="image/*" style="display:none" onchange="loadPhoto(this)">
                                 <small style="color:var(--txt3)">Toca para agregar foto (opcional)</small>
                             </div>
                         </div>
@@ -83,24 +82,29 @@
                             <input type="text" id="inputDni" required placeholder="Ej: 12345678">
                         </div>
                         <div class="field">
+                            <label>Correo electrónico</label>
+                            <input type="email" id="inputEmail" placeholder="correo@ejemplo.com">
+                        </div>
+                        <div class="field">
+                            <label>Teléfono</label>
+                            <input type="tel" id="inputPhone" placeholder="Ej: 70000000">
+                        </div>
+                        <div class="field">
                             <label>Curso *</label>
-                            <select id="inputGrade" required>
+                            <select id="inputCourse" required onchange="updateScheduleOptions()">
                                 <option value="">Cargando cursos...</option>
                             </select>
                         </div>
                         <div class="field">
-                            <label>Paralelo *</label>
-                            <select id="inputSection" required>
-                                <option value="">Seleccionar...</option>
-                                <option>A</option>
-                                <option>B</option>
-                                <option>C</option>
+                            <label>Horario disponible *</label>
+                            <select id="inputSchedule" required>
+                                <option value="">Primero selecciona un curso</option>
                             </select>
                         </div>
 
                         <div class="field full">
                             <button type="submit" class="btn btn-blue btn-block">
-                                📱 Registrar y Generar Código QR
+                                📱 Registrar y Generar Carnet QR
                             </button>
                         </div>
                     </div>
@@ -124,8 +128,6 @@
         <section id="panel-scanner" class="panel">
             <div class="card">
                 <div class="card-title">📷 Escáner de Asistencia</div>
-
-                <!-- Selector Entrada / Salida -->
                 <div class="scan-mode-selector">
                     <label class="mode-entrada">
                         <input type="radio" name="scanMode" value="ENTRADA" checked>
@@ -136,35 +138,34 @@
                         🔴 Salida
                     </label>
                 </div>
-
-                <!-- Vista del escáner (botones en inglés se reemplazan vía CSS + MutationObserver en app.js) -->
                 <div class="scanner-wrapper">
                     <div id="reader"></div>
                 </div>
-
-                <!-- Retroalimentación -->
                 <div id="scanFeedback"></div>
             </div>
-
             <div class="card">
                 <div class="card-title">📋 Registros de Hoy</div>
                 <div id="todayLog"></div>
             </div>
         </section>
 
-        <!-- ─── PANEL: ALUMNOS ─── -->
+        <!-- ─── PANEL: ESTUDIANTES ─── -->
         <section id="panel-students" class="panel">
-            <input type="text" id="searchBox" class="search-box"
-                   placeholder="🔍 Buscar alumno por nombre o DNI..."
-                   oninput="renderStudentsTable()">
+            <div class="search-wrap">
+                <input type="text" id="searchBox" class="search-box"
+                       placeholder="🔍 Buscar por nombre, CI o curso..."
+                       oninput="renderStudentsTable()">
+            </div>
             <div class="card">
-                <div class="card-title">👥 Lista de Alumnos</div>
+                <div class="card-title">👥 Lista de Estudiantes</div>
                 <div class="table-wrap">
                     <table>
                         <thead>
                             <tr>
                                 <th>Estudiante</th>
                                 <th>Carnet</th>
+                                <th>Curso</th>
+                                <th>Horario</th>
                                 <th>Estado Hoy</th>
                                 <th>QR</th>
                             </tr>
@@ -179,19 +180,23 @@
         <section id="panel-attendance" class="panel">
             <div class="stats-grid">
                 <div class="stat-card blue">
+                    <div class="stat-icon">👥</div>
                     <div class="stat-label">Total Estudiantes</div>
                     <div class="stat-value" id="statTotal">0</div>
                 </div>
                 <div class="stat-card green">
+                    <div class="stat-icon">✅</div>
                     <div class="stat-label">Presentes Hoy</div>
                     <div class="stat-value" id="statPresent">0</div>
                 </div>
                 <div class="stat-card red">
+                    <div class="stat-icon">❌</div>
                     <div class="stat-label">Ausentes Hoy</div>
                     <div class="stat-value" id="statAbsent">0</div>
                 </div>
                 <div class="stat-card amber">
-                    <div class="stat-label">Salidas Registradas</div>
+                    <div class="stat-icon">🚪</div>
+                    <div class="stat-label">Salidas</div>
                     <div class="stat-value" id="statExits">0</div>
                 </div>
             </div>
@@ -221,16 +226,14 @@
                         </select>
                     </div>
                     <div class="field">
-                        <label>Paralelo</label>
-                        <select id="reportSection" onchange="renderReports()">
-                            <option value="">Todos</option>
+                        <label>Horario</label>
+                        <select id="reportSchedule" onchange="renderReports()">
+                            <option value="">Todos los horarios</option>
                         </select>
                     </div>
-                    <div class="field" style="justify-content:flex-end">
+                    <div class="field btn-field">
                         <label>&nbsp;</label>
-                        <button class="btn btn-green btn-sm" onclick="downloadReport()">
-                            📄 Descargar PDF
-                        </button>
+                        <button class="btn btn-green btn-sm" onclick="downloadReport()">📄 Descargar PDF</button>
                     </div>
                 </div>
 
@@ -257,23 +260,72 @@
                     </table>
                 </div>
             </div>
-
             <div class="card">
                 <div class="card-title">🕐 Horarios del Día</div>
                 <div id="scheduleToday"></div>
             </div>
         </section>
 
+        <!-- ─── PANEL: PERMISOS ─── -->
+        <section id="panel-permisos" class="panel">
+            <div class="card">
+                <div class="card-title">🔐 Gestión de Accesos y Permisos</div>
+                <form id="permForm" onsubmit="addPermiso(event)">
+                    <div class="form-grid">
+                        <div class="field">
+                            <label>Correo electrónico *</label>
+                            <input type="email" id="permEmail" required placeholder="usuario@gmail.com">
+                        </div>
+                        <div class="field">
+                            <label>Nombre / Cargo</label>
+                            <input type="text" id="permNombre" placeholder="Ej: Lic. María García">
+                        </div>
+                        <div class="field">
+                            <label>Rol *</label>
+                            <select id="permRol" required>
+                                <option value="">Seleccionar rol...</option>
+                                <option value="ADMIN">🔑 ADMIN — Acceso total</option>
+                                <option value="REGISTRO">📝 REGISTRO — Solo registrar estudiantes</option>
+                                <option value="SCANNER">📷 SCANNER — Solo escanear asistencia</option>
+                                <option value="VIEWER">👁 VIEWER — Solo ver reportes</option>
+                            </select>
+                        </div>
+                        <div class="field btn-field">
+                            <label>&nbsp;</label>
+                            <button type="submit" class="btn btn-blue btn-sm">➕ Agregar Permiso</button>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="perm-legend">
+                    <div class="perm-legend-item"><span class="role-tag role-ADMIN">ADMIN</span> Acceso total: registrar, escanear, ver reportes y gestionar permisos</div>
+                    <div class="perm-legend-item"><span class="role-tag role-REGISTRO">REGISTRO</span> Puede registrar nuevos estudiantes y generar carnets</div>
+                    <div class="perm-legend-item"><span class="role-tag role-SCANNER">SCANNER</span> Solo puede escanear QR para marcar asistencia</div>
+                    <div class="perm-legend-item"><span class="role-tag role-VIEWER">VIEWER</span> Solo puede consultar y descargar reportes</div>
+                </div>
+
+                <div class="table-wrap" style="margin-top:14px">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Correo</th>
+                                <th>Nombre / Cargo</th>
+                                <th>Rol</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="permisosBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
     </main>
 
-    <!-- ═══════════════════════════════════════
-         TOASTS
-    ═══════════════════════════════════════ -->
+    <!-- TOASTS -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <!-- ═══════════════════════════════════════
-         MODAL QR
-    ═══════════════════════════════════════ -->
+    <!-- MODAL QR -->
     <div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
         <div class="modal">
             <h3 id="modalName"></h3>
@@ -286,24 +338,18 @@
         </div>
     </div>
 
-    <!-- ═══════════════════════════════════════
-         NOTIFICACIÓN EMERGENTE DE ESCANEO
-    ═══════════════════════════════════════ -->
-    <div id="scanNotification" class="scan-notification" onclick="this.classList.remove('visible')">
+    <!-- NOTIFICACIÓN EMERGENTE DE ESCANEO -->
+    <div id="scanNotification" class="scan-notification" onclick="closeScanNotif()">
         <div class="scan-notif-inner">
             <div class="scan-notif-icon" id="scanNotifIcon">✅</div>
             <div class="scan-notif-name" id="scanNotifName">Nombre del Estudiante</div>
             <div class="scan-notif-detail" id="scanNotifDetail">Entrada registrada · 08:00</div>
-            <div class="scan-notif-course" id="scanNotifCourse">Curso A</div>
+            <div class="scan-notif-course" id="scanNotifCourse">Curso</div>
             <div class="scan-notif-hint">Toca para cerrar</div>
         </div>
     </div>
 
-    <!-- ═══════════════════════════════════════
-         SCRIPTS PROPIOS
-    ═══════════════════════════════════════ -->
     <script src="config.js"></script>
     <script src="app.js"></script>
-
 </body>
 </html>
