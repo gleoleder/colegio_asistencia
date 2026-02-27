@@ -1,242 +1,217 @@
-# 📋 Sistema de Asistencia QR — Colegio San Agustín
-
-Sistema completo de control de asistencia escolar mediante códigos QR, con sincronización a Google Sheets y Google Drive.
+# 📋 Sistema de Asistencia QR — Instituto CEAN
+**Versión 4.0** · Documentación completa
 
 ---
 
-## 📁 Estructura del Proyecto
+## 🗂️ Estructura de archivos
 
 ```
-asistencia/
-├── index.html          ← Página principal
-├── css/
-│   └── styles.css      ← Estilos responsive
-├── js/
-│   ├── config.js       ← Configuración y constantes
-│   └── script.js       ← Lógica de la aplicación
-└── README.md           ← Este archivo
+├── index.html     → Interfaz principal (todos los paneles)
+├── app.js         → Lógica de la aplicación
+├── styles.css     → Estilos y animaciones
+├── config.js      → Configuración (API keys, nombres de hojas)
+└── README.md      → Esta documentación
 ```
 
 ---
 
-## 🗄️ Estructura de la Base de Datos (Google Sheets)
+## 🗄️ Estructura de la base de datos (Google Sheets)
 
-La hoja de cálculo de Google **debe tener 4 pestañas (hojas)**. Cada pestaña debe tener los encabezados exactos en la **fila 1**.
+El sistema usa una hoja de cálculo de Google Sheets con **5 pestañas** obligatorias. Los nombres deben ser exactos.
 
-### 📌 Pestaña 1: `Estudiantes`
+---
 
-Contiene los datos de cada alumno registrado.
+### Pestaña `Estudiantes`
+Columnas A–K
 
-| Columna | Campo       | Tipo    | Descripción                          | Ejemplo                     |
-|---------|-------------|---------|--------------------------------------|-----------------------------|
-| A       | `id`        | Texto   | Identificador único (generado)       | `SID1709234567890`          |
-| B       | `nombre`    | Texto   | Nombre completo del alumno           | `Juan Carlos Pérez López`   |
-| C       | `dni`       | Texto   | Número de documento de identidad     | `12345678`                  |
-| D       | `grado`     | Texto   | Grado escolar                        | `3° Primaria`               |
-| E       | `seccion`   | Texto   | Sección del aula                     | `A`                         |
-| F       | `fotoUrl`   | Texto   | URL de la foto en Google Drive       | `https://drive.google...`   |
-| G       | `qrUrl`     | Texto   | URL de la imagen QR en Google Drive  | `https://drive.google...`   |
-| H       | `fechaReg`  | Texto   | Fecha y hora de registro (ISO 8601)  | `2025-02-26T08:30:00.000Z`  |
+| Col | Campo | Descripción | Ejemplo |
+|-----|-------|-------------|---------|
+| A | id | ID único generado por el sistema | `SID1700000000000` |
+| B | name | Nombre completo del estudiante | `Juan Carlos Mamani` |
+| C | dni | Carnet de Identidad | `8523147` |
+| D | email | Correo del estudiante | `juan@gmail.com` |
+| E | phone | Teléfono de contacto | `76543210` |
+| F | course | Nombre del curso (debe coincidir con col B de Cursos) | `Prefacultativo Derecho` |
+| G | schedule | Horario seleccionado al registrar | `Lunes, Miércoles: 07:30–12:00 · Aula 101` |
+| H | photoUrl | URL de foto en Google Drive (lo llena el sistema) | `https://drive.google.com/...` |
+| I | qrUrl | URL del QR en Google Drive (lo llena el sistema) | `https://drive.google.com/...` |
+| J | createdAt | Fecha/hora de registro ISO | `2025-03-01T10:30:00.000Z` |
+| K | registeredBy | Correo de quien registró | `admin@cean.edu.bo` |
 
-**Ejemplo de fila 1 (encabezados):**
+**Fila 1 = encabezados** (el sistema empieza a leer desde A2)
+
+---
+
+### Pestaña `Asistencia`
+Columnas A–I · **Esta pestaña la llena automáticamente el sistema al escanear QR**
+
+| Col | Campo | Descripción | Ejemplo |
+|-----|-------|-------------|---------|
+| A | sid | ID del estudiante | `SID1700000000000` |
+| B | name | Nombre completo | `Juan Carlos Mamani` |
+| C | dni | Carnet de Identidad | `8523147` |
+| D | course | Curso del estudiante | `Prefacultativo Derecho` |
+| E | schedule | Horario | `Lunes, Miércoles: 07:30–12:00` |
+| F | date | Fecha del registro | `2025-03-03` |
+| G | time | Hora del registro | `07:45:12` |
+| H | type | Tipo: ENTRADA o SALIDA | `ENTRADA` |
+| I | registeredBy | Correo de quien escaneó | `scanner@cean.edu.bo` |
+
+---
+
+### Pestaña `Cursos`
+Columnas A–E · Define los cursos disponibles en el sistema
+
+| Col | Campo | Descripción | Ejemplo |
+|-----|-------|-------------|---------|
+| A | id | ID del curso | `CUR001` |
+| B | name | Nombre del curso ⚠️ debe coincidir exactamente con `Estudiantes!F` | `Prefacultativo Derecho` |
+| C | grade | Tipo/categoría del curso | `Prefacultativo` |
+| D | active | SI = visible en el sistema, NO = oculto | `SI` |
+| E | description | Descripción opcional | `Preparación para ingreso a Derecho` |
+
+**Ejemplo de datos:**
 ```
-id | nombre | dni | grado | seccion | fotoUrl | qrUrl | fechaReg
+CUR001  Prefacultativo Derecho       Prefacultativo  SI  Preparación para ingreso a Derecho
+CUR002  Prefacultativo Medicina      Prefacultativo  SI  Preparación para ingreso a Medicina
+CUR003  Prefacultativo Ingeniería    Prefacultativo  SI  Preparación para ingreso a Ingeniería
+CUR004  Prefacultativo Psicología    Prefacultativo  SI  Preparación para ingreso a Psicología
+CUR005  Prefacultativo Economía      Prefacultativo  SI  Preparación para ingreso a Economía
+CUR006  Prefacultativo Arquitectura  Prefacultativo  SI  Preparación para ingreso a Arquitectura
+CUR007  Nivelación Matemática        Nivelación      SI  Curso de temporada
+CUR008  Nivelación Química           Nivelación      SI  Curso de temporada
+CUR009  Taller de Redacción          Taller          SI  Curso libre
+CUR010  Curso Antiguo                Otro            NO  (desactivado, no aparece en el sistema)
 ```
 
 ---
 
-### 📌 Pestaña 2: `Asistencia`
+### Pestaña `Horarios`
+Columnas A–F · Define los horarios de cada curso
 
-Registra cada marcación de entrada o salida.
+| Col | Campo | Descripción | Ejemplo |
+|-----|-------|-------------|---------|
+| A | courseId | ID del curso (col A de Cursos) | `CUR001` |
+| B | courseName | Nombre del curso (col B de Cursos) | `Prefacultativo Derecho` |
+| C | day | Día de la semana en español minúsculas | `lunes` |
+| D | startTime | Hora de inicio (HH:MM) | `07:30` |
+| E | endTime | Hora de fin (HH:MM) | `12:00` |
+| F | room | Aula o sala (opcional) | `Aula 101` |
 
-| Columna | Campo       | Tipo    | Descripción                          | Ejemplo                |
-|---------|-------------|---------|--------------------------------------|------------------------|
-| A       | `sid`       | Texto   | ID del alumno (referencia)           | `SID1709234567890`     |
-| B       | `nombre`    | Texto   | Nombre del alumno (redundante)       | `Juan Carlos Pérez`    |
-| C       | `dni`       | Texto   | DNI del alumno                       | `12345678`             |
-| D       | `grado`     | Texto   | Grado del alumno                     | `3° Primaria`          |
-| E       | `seccion`   | Texto   | Sección del alumno                   | `A`                    |
-| F       | `fecha`     | Texto   | Fecha de la asistencia (YYYY-MM-DD)  | `2025-02-26`           |
-| G       | `hora`      | Texto   | Hora de la marcación (HH:MM:SS)      | `07:45:23`             |
-| H       | `tipo`      | Texto   | Tipo de registro                     | `ENTRADA` o `SALIDA`   |
+**Valores válidos para `day`:** `lunes` `martes` `miércoles` `jueves` `viernes` `sábado` `domingo`
 
-**Ejemplo de fila 1 (encabezados):**
+**Ejemplo — un curso que va de lunes a viernes:**
 ```
-sid | nombre | dni | grado | seccion | fecha | hora | tipo
+CUR001  Prefacultativo Derecho   lunes      07:30  12:00  Aula 101
+CUR001  Prefacultativo Derecho   martes     07:30  12:00  Aula 101
+CUR001  Prefacultativo Derecho   miércoles  07:30  12:00  Aula 101
+CUR001  Prefacultativo Derecho   jueves     07:30  12:00  Aula 101
+CUR001  Prefacultativo Derecho   viernes    07:30  12:00  Aula 101
+CUR002  Prefacultativo Medicina  lunes      08:00  13:00  Aula 205
+CUR002  Prefacultativo Medicina  martes     08:00  13:00  Aula 205
+CUR007  Nivelación Matemática    lunes      09:00  11:00  Aula 302
+CUR007  Nivelación Matemática    miércoles  09:00  11:00  Aula 302
+CUR007  Nivelación Matemática    viernes    09:00  11:00  Aula 302
 ```
 
 ---
 
-### 📌 Pestaña 3: `Cursos`
+### Pestaña `Permisos`
+Columnas A–C · Controla quién puede acceder al sistema y con qué rol
 
-Lista de cursos/materias disponibles. **Los cursos temporales se agregan aquí y se desactivan cambiando el campo `activo` a `NO`.**
+| Col | Campo | Descripción | Ejemplo |
+|-----|-------|-------------|---------|
+| A | email | Correo Google del usuario (minúsculas) | `admin@gmail.com` |
+| B | nombre | Nombre o cargo del usuario | `Lic. María García` |
+| C | rol | Rol asignado (ver tabla de roles) | `ADMIN` |
 
-| Columna | Campo         | Tipo    | Descripción                              | Ejemplo                  |
-|---------|---------------|---------|------------------------------------------|--------------------------|
-| A       | `id`          | Texto   | Identificador único del curso            | `CUR001`                 |
-| B       | `nombre`      | Texto   | Nombre del curso o materia               | `Matemáticas`            |
-| C       | `grado`       | Texto   | Grado al que pertenece                   | `3° Primaria`            |
-| D       | `activo`      | Texto   | Si el curso está activo (`SI` / `NO`)    | `SI`                     |
-| E       | `descripcion` | Texto   | Descripción opcional                     | `Curso temporal verano`  |
+**Roles disponibles:**
 
-**Ejemplo de fila 1 (encabezados):**
+| Rol | Acceso |
+|-----|--------|
+| `ADMIN` | Acceso total: registrar, escanear, reportes, gestionar permisos |
+| `REGISTRO` | Solo puede registrar nuevos estudiantes y generar carnets |
+| `SCANNER` | Solo puede escanear QR para marcar asistencia |
+| `VIEWER` | Solo puede consultar y descargar reportes |
+
+**⚠️ IMPORTANTE:** El primer ADMIN debe agregarse directamente en la hoja antes de iniciar sesión, porque el sistema bloquea a cualquier correo que no esté en esta lista.
+
+**Ejemplo:**
 ```
-id | nombre | grado | activo | descripcion
+admin@gmail.com          Director CEAN           ADMIN
+secretaria@gmail.com     Lic. María García        REGISTRO
+portero@gmail.com        Sr. Pedro López          SCANNER
+docente@gmail.com        Prof. Ana Condori        VIEWER
 ```
-
-> 💡 **Cursos temporales**: Para agregar un curso temporal, simplemente añade una fila nueva con `activo = SI`. Cuando termine el periodo, cambia a `NO` y el sistema lo ignorará.
 
 ---
 
-### 📌 Pestaña 4: `Horarios`
+## ⚙️ Configuración inicial (config.js)
 
-Define los horarios de cada curso por día de la semana.
-
-| Columna | Campo         | Tipo    | Descripción                              | Ejemplo          |
-|---------|---------------|---------|------------------------------------------|------------------|
-| A       | `cursoId`     | Texto   | ID del curso (referencia a Cursos)       | `CUR001`         |
-| B       | `cursoNombre` | Texto   | Nombre del curso (para fácil lectura)    | `Matemáticas`    |
-| C       | `dia`         | Texto   | Día de la semana                         | `lunes`          |
-| D       | `horaInicio`  | Texto   | Hora de inicio (HH:MM)                  | `08:00`          |
-| E       | `horaFin`     | Texto   | Hora de fin (HH:MM)                     | `09:30`          |
-| F       | `aula`        | Texto   | Aula o salón (opcional)                  | `Aula 3-A`       |
-
-**Ejemplo de fila 1 (encabezados):**
-```
-cursoId | cursoNombre | dia | horaInicio | horaFin | aula
-```
-
-**Valores válidos para `dia`:** `lunes`, `martes`, `miércoles`, `jueves`, `viernes`, `sábado`, `domingo`
-
----
-
-## 🚀 Instalación y Configuración
-
-### Paso 1: Crear la Hoja de Cálculo
-
-1. Ve a [Google Sheets](https://sheets.google.com) y crea una nueva hoja de cálculo.
-2. Crea las **4 pestañas** con los nombres exactos:
-   - `Estudiantes`
-   - `Asistencia`
-   - `Cursos`
-   - `Horarios`
-3. En cada pestaña, agrega los **encabezados en la fila 1** como se indica arriba.
-4. Copia el **ID de la hoja de cálculo** de la URL:
-   ```
-   https://docs.google.com/spreadsheets/d/ESTE_ES_EL_ID/edit
-   ```
-
-### Paso 2: Crear Carpeta en Google Drive
-
-1. Crea una carpeta en Google Drive para almacenar fotos y QRs.
-2. Copia el **ID de la carpeta** de la URL:
-   ```
-   https://drive.google.com/drive/folders/ESTE_ES_EL_ID
-   ```
-
-### Paso 3: Configurar Google Cloud
-
-1. Ve a [Google Cloud Console](https://console.cloud.google.com).
-2. Crea un proyecto nuevo o usa uno existente.
-3. Habilita las APIs:
-   - **Google Sheets API**
-   - **Google Drive API**
-4. Crea credenciales:
-   - **Clave de API** (API Key)
-   - **ID de cliente OAuth 2.0** (Client ID) — tipo "Aplicación web"
-5. En la configuración de OAuth, agrega los orígenes autorizados (ej: `http://localhost`, tu dominio).
-
-### Paso 4: Configurar el Sistema
-
-Edita el archivo `js/config.js` y reemplaza los valores:
+Antes de usar el sistema edita estos valores en `config.js`:
 
 ```javascript
-const CONFIG = {
-    CLIENT_ID: 'TU_CLIENT_ID_AQUÍ',
-    API_KEY: 'TU_API_KEY_AQUÍ',
-    SHEET_ID: 'TU_SHEET_ID_AQUÍ',
-    FOLDER_ID: 'TU_FOLDER_ID_AQUÍ',
-    // ...
-};
+CLIENT_ID: 'TU_CLIENT_ID.apps.googleusercontent.com',  // Google OAuth
+API_KEY:   'TU_API_KEY',                                // Google Sheets API
+SHEET_ID:  'ID_DE_TU_HOJA_DE_CALCULO',                // El ID largo de tu Google Sheets
+FOLDER_ID: 'ID_DE_TU_CARPETA_DRIVE',                  // Carpeta de Google Drive para fotos/QRs
 ```
 
-### Paso 5: Abrir el Sistema
-
-Abre `index.html` en un navegador web. Para uso en red local, puedes usar un servidor simple:
-
-```bash
-# Con Python
-python3 -m http.server 8080
-
-# Con Node.js (npx)
-npx serve .
-```
-
-Luego accede desde cualquier dispositivo en la misma red: `http://IP_DEL_SERVIDOR:8080`
+Para obtener estas credenciales:
+1. Ve a [console.cloud.google.com](https://console.cloud.google.com)
+2. Crea un proyecto → habilita Google Sheets API + Google Drive API
+3. Crea credenciales OAuth 2.0 → copia el Client ID
+4. Crea una API Key → copia el API Key
+5. El SHEET_ID está en la URL de tu hoja: `docs.google.com/spreadsheets/d/**SHEET_ID**/edit`
 
 ---
 
-## 📱 Funcionalidades
+## 🚀 Cómo usar el sistema
 
-| Función | Descripción |
-|---------|-------------|
-| **Registrar alumnos** | Formulario con foto, datos personales y generación automática de QR |
-| **Escanear QR** | Cámara del dispositivo para registrar entrada/salida |
-| **Ver alumnos** | Lista con búsqueda, estado del día (presente/ausente) |
-| **Asistencia** | Dashboard con estadísticas del día en tiempo real |
-| **Reportes** | Filtros por fecha, grado y sección + descarga en PDF |
-| **Horarios** | Muestra los horarios del día actual desde la hoja de cálculo |
-| **Cursos temporales** | Se gestionan directamente en la hoja `Cursos` (activo: SI/NO) |
-| **Carnet PDF** | Genera un carnet con datos del alumno y su código QR |
-| **Sincronización** | Funciona sin conexión (localStorage) y sincroniza con Google Sheets |
+### Primer uso
+1. Subir los 4 archivos a un servidor web (o abrir `index.html` localmente)
+2. Agregar el correo del admin en la pestaña `Permisos` directamente en Sheets
+3. Llenar la pestaña `Cursos` con los cursos del instituto
+4. Llenar la pestaña `Horarios` con los horarios de cada curso
+5. Hacer clic en **"🔑 Conectar Google"** e iniciar sesión con el correo de admin
+6. El sistema cargará todos los datos automáticamente
 
----
+### Registrar estudiante
+1. Ir al panel **📝 Registrar**
+2. Completar: nombre, carnet, correo, teléfono (opcional foto)
+3. Seleccionar **Curso** → el select de **Horario** se llena automáticamente con los horarios disponibles de ese curso
+4. Clic en **"Registrar y Generar Carnet QR"**
+5. Descargar el **Carnet PDF** o el **QR PNG**
 
-## 📊 Ejemplo de Datos en la Hoja de Cálculo
+### Marcar asistencia
+1. Ir al panel **📷 Escanear**
+2. Seleccionar **Entrada** o **Salida**
+3. Apuntar la cámara al código QR del carnet
+4. Aparece la **notificación emergente grande** con el nombre del estudiante
 
-### Pestaña `Cursos` (ejemplo)
-
-| id     | nombre               | grado        | activo | descripcion              |
-|--------|----------------------|--------------|--------|--------------------------|
-| CUR001 | Matemáticas          | 3° Primaria  | SI     |                          |
-| CUR002 | Lenguaje             | 3° Primaria  | SI     |                          |
-| CUR003 | Ciencias Naturales   | 3° Primaria  | SI     |                          |
-| CUR004 | Taller de Robótica   | 3° Primaria  | SI     | Curso temporal - verano  |
-| CUR005 | Taller de Arte       | 4° Primaria  | NO     | Finalizó en diciembre    |
-
-### Pestaña `Horarios` (ejemplo)
-
-| cursoId | cursoNombre        | dia       | horaInicio | horaFin | aula      |
-|---------|--------------------|-----------|------------|---------|-----------|
-| CUR001  | Matemáticas        | lunes     | 08:00      | 09:30   | Aula 3-A  |
-| CUR001  | Matemáticas        | miércoles | 08:00      | 09:30   | Aula 3-A  |
-| CUR002  | Lenguaje           | lunes     | 09:45      | 11:15   | Aula 3-A  |
-| CUR004  | Taller de Robótica | viernes   | 14:00      | 15:30   | Lab. 1    |
+### Reportes
+- Filtrar por **rango de fechas**, **curso** y/o **horario**
+- Ver estadísticas de presentes/ausentes
+- Descargar **PDF del reporte**
 
 ---
 
-## 🔧 Notas Técnicas
+## 📐 Estructura del carnet generado
 
-- **Almacenamiento local**: Los datos se guardan en `localStorage` para funcionar sin internet.
-- **Sincronización**: Al conectar con Google, los datos se sincronizan automáticamente.
-- **QR**: Cada código QR contiene solo el ID del alumno (`{id: "SIDxxxx"}`), lo que lo hace rápido de escanear.
-- **Responsive**: La interfaz se adapta a celulares, tablets y computadoras de escritorio.
-- **Notificaciones**: Las notificaciones de registro aparecen centradas en la pantalla para máxima visibilidad.
-
----
-
-## 🌐 Compatibilidad
-
-| Navegador      | Soporte |
-|----------------|---------|
-| Chrome (móvil/escritorio) | ✅ |
-| Firefox        | ✅ |
-| Safari (iOS)   | ✅ |
-| Edge           | ✅ |
-| Opera          | ✅ |
+El carnet PDF tiene formato CR80 (tarjeta de crédito) en orientación horizontal con:
+- Logo del Instituto CEAN
+- Foto del estudiante (o iniciales si no tiene foto)
+- Nombre completo, Carnet de Identidad, Curso, Horario, Año
+- Código QR con fondo blanco propio (no intersecta con el diseño)
+- ID único y fecha de emisión
 
 ---
 
-## 📄 Licencia
+## 🔧 Notas técnicas
 
-Uso exclusivo para el Colegio San Agustín. Todos los derechos reservados.
+- Los datos se guardan en **localStorage** como respaldo offline
+- Las fotos y QRs se suben a **Google Drive** (carpeta configurada en FOLDER_ID)
+- La asistencia se registra en tiempo real en **Google Sheets**
+- El sistema funciona en navegadores modernos (Chrome, Firefox, Safari, Edge)
+- Compatible con dispositivos móviles y tablets
+- Para escaneo en producción se recomienda usar Chrome en Android o Safari en iOS
