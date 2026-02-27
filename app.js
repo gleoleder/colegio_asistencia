@@ -1645,7 +1645,7 @@ async function downloadCarnetPDF() {
         doc.text('institutocean.edu.bo', fx + 6, fy + cardH - 4);
 
         // Badge "Vigente" con rectángulo redondeado
-        const vigText = '● Vigente';
+        const vigText = 'Vigente';
         doc.setFontSize(5);
         doc.setFont('helvetica', 'bold');
         const vigW = doc.getTextWidth(vigText) + 5;
