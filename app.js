@@ -1229,19 +1229,93 @@ function downloadReport() {
     showToast('ok','Reporte generado','PDF descargado');
 }
 
-// ─── MODAL QR ────────────────────────────────────────────────
+// ─── MODAL CARNET 3D ─────────────────────────────────────────
 function openQRModal(studentId) {
-    const s = APP.db.students.find(s=>s.id===studentId);
+    const s = APP.db.students.find(s => s.id === studentId);
     if (!s) return;
     APP.lastStudent = { ...s, photo: s.photo || (s.photoUrl?.startsWith('data:') ? s.photoUrl : null) };
-    document.getElementById('modalName').textContent = s.name;
-    document.getElementById('modalInfo').textContent = `${s.course} · CI: ${s.dni}`;
-    const qrWrap = document.getElementById('modalQR');
-    qrWrap.innerHTML = '';
-    new QRCode(qrWrap, { text: JSON.stringify({ id: s.id }), width: 160, height: 160 });
+
+    // Reset flip
+    const inner = document.getElementById('carnetInner');
+    if (inner) inner.classList.remove('flipped');
+
+    // Rellenar FRENTE
+    const initials = (s.name || '?').split(' ').map(w => w[0] || '').join('').substring(0, 2).toUpperCase();
+    document.getElementById('cnInitials').textContent = initials;
+    document.getElementById('cnName').textContent     = s.name || '—';
+    document.getElementById('cnRole').textContent     = 'Estudiante';
+    document.getElementById('cnDept').textContent     = s.course || '—';
+    document.getElementById('cnDni').textContent      = s.dni || '—';
+    document.getElementById('cnYear').textContent     = new Date().getFullYear();
+    document.getElementById('cnSchedule').textContent = s.schedule || '—';
+
+    // Foto si existe
+    const photoInner = document.getElementById('cnPhotoInner');
+    const placeholder = document.getElementById('cnInitials');
+    let existingImg = photoInner.querySelector('img');
+    if (s.photoUrl && s.photoUrl.startsWith('http')) {
+        placeholder.style.display = 'none';
+        if (!existingImg) { existingImg = document.createElement('img'); photoInner.appendChild(existingImg); }
+        existingImg.src = s.photoUrl;
+        existingImg.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center top;display:block;border-radius:8px;';
+    } else if (APP.lastStudent.photo) {
+        placeholder.style.display = 'none';
+        if (!existingImg) { existingImg = document.createElement('img'); photoInner.appendChild(existingImg); }
+        existingImg.src = APP.lastStudent.photo;
+        existingImg.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center top;display:block;border-radius:8px;';
+    } else {
+        if (existingImg) existingImg.remove();
+        placeholder.style.display = '';
+        placeholder.textContent = initials;
+    }
+
+    // Rellenar DORSO
+    document.getElementById('cnDniBack').textContent = s.dni || '—';
+    document.getElementById('cnSid').textContent     = s.id || '—';
+
+    // QR en el dorso
+    const qrContainer = document.getElementById('cnQrCode');
+    qrContainer.innerHTML = '';
+    new QRCode(qrContainer, {
+        text: JSON.stringify({ id: s.id }),
+        width: 104, height: 104,
+        correctLevel: QRCode.CorrectLevel.H
+    });
+
     document.getElementById('overlay').classList.add('open');
 }
-function closeModal() { document.getElementById('overlay').classList.remove('open'); }
+
+function closeModal() {
+    document.getElementById('overlay').classList.remove('open');
+}
+
+async function downloadCarnetPDF() {
+    if (!APP.lastStudent) return;
+    showToast('info', 'Generando carnet...', 'Por favor espera');
+    const { jsPDF } = window.jspdf;
+    const qrC = await buildQRCanvas(APP.lastStudent.id);
+    const ph  = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
+    const cC  = await buildCredentialCanvas(APP.lastStudent, qrC, ph);
+    const doc = new jsPDF({ orientation:'landscape', unit:'mm', format:[100,63] });
+    doc.addImage(cC.toDataURL('image/jpeg', .97), 'JPEG', 0, 0, 100, 63);
+    doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
+    showToast('ok', 'Carnet generado', APP.lastStudent.name);
+}
+
+async function downloadCarnetQR() {
+    if (!APP.lastStudent) return;
+    const canvas = document.querySelector('#cnQrCode canvas');
+    if (!canvas) return;
+    const out = document.createElement('canvas'); const pad = 16;
+    out.width  = canvas.width  + pad * 2;
+    out.height = canvas.height + pad * 2;
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(canvas, pad, pad);
+    const a = document.createElement('a');
+    a.download = `QR_${APP.lastStudent.dni}.png`;
+    a.href = out.toDataURL(); a.click();
+}
 
 // ─── CARNET PDF ──────────────────────────────────────────────
 function roundRect(ctx, x, y, w, h, r) {
@@ -1376,43 +1450,20 @@ function buildQRCanvas(studentId) {
     });
 }
 
+// Aliases para compatibilidad con botones del panel de registro
 async function downloadQRPng() {
     const canvas = document.querySelector('#qrcode canvas');
     if (!canvas || !APP.lastStudent) return;
-    const out=document.createElement('canvas'); const pad=20;
-    out.width=canvas.width+pad*2; out.height=canvas.height+pad*2;
-    const ctx=out.getContext('2d');
-    ctx.fillStyle='#fff'; ctx.fillRect(0,0,out.width,out.height);
-    ctx.drawImage(canvas,pad,pad);
-    const a=document.createElement('a');
-    a.download=`QR_${APP.lastStudent.dni}.png`; a.href=out.toDataURL(); a.click();
+    const out = document.createElement('canvas'); const pad = 20;
+    out.width  = canvas.width + pad*2; out.height = canvas.height + pad*2;
+    const ctx  = out.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,out.width,out.height);
+    ctx.drawImage(canvas, pad, pad);
+    const a = document.createElement('a');
+    a.download = `QR_${APP.lastStudent.dni}.png`; a.href = out.toDataURL(); a.click();
 }
-
-async function downloadPDF() {
-    if (!APP.lastStudent) return;
-    showToast('info','Generando carnet...','Por favor espera');
-    const {jsPDF} = window.jspdf;
-    const qrC = await buildQRCanvas(APP.lastStudent.id);
-    const ph  = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
-    const cC  = await buildCredentialCanvas(APP.lastStudent, qrC, ph);
-    const doc = new jsPDF({orientation:'landscape',unit:'mm',format:[100,63]});
-    doc.addImage(cC.toDataURL('image/jpeg',.97),'JPEG',0,0,100,63);
-    doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
-    showToast('ok','Carnet generado',APP.lastStudent.name);
-}
-
-async function downloadPDFFromModal() {
-    if (!APP.lastStudent) return;
-    showToast('info','Generando carnet...','Por favor espera');
-    const {jsPDF} = window.jspdf;
-    const qrC = await buildQRCanvas(APP.lastStudent.id);
-    const ph  = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
-    const cC  = await buildCredentialCanvas(APP.lastStudent, qrC, ph);
-    const doc = new jsPDF({orientation:'landscape',unit:'mm',format:[100,63]});
-    doc.addImage(cC.toDataURL('image/jpeg',.97),'JPEG',0,0,100,63);
-    doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
-    showToast('ok','Carnet generado',APP.lastStudent.name);
-}
+async function downloadPDF()          { await downloadCarnetPDF(); }
+async function downloadPDFFromModal() { await downloadCarnetPDF(); }
 
 // ─── NAVEGACIÓN ──────────────────────────────────────────────
 function initNavigation() {
