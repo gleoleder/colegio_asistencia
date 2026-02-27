@@ -1316,45 +1316,36 @@ const photoCache = {};
 async function loadDrivePhotoAsBase64(driveUrl, studentId) {
     try {
         const token = getToken();
-        if (!token) return null;
+        if (!token || !driveUrl) return null;
 
-        // Extraer fileId de distintos formatos de URL de Drive:
-        // https://drive.google.com/uc?export=view&id=FILE_ID
-        // https://drive.google.com/file/d/FILE_ID/view
-        // https://lh3.googleusercontent.com/d/FILE_ID
+        // Extraer el ID de forma más agresiva
         let fileId = null;
-
-        const ucMatch  = driveUrl.match(/[?&]id=([^&]+)/);
-        const fdMatch  = driveUrl.match(/\/d\/([^/]+)/);
-        const lhMatch  = driveUrl.match(/\/d\/([^/?]+)/);
-
-        if (ucMatch)       fileId = ucMatch[1];
-        else if (fdMatch)  fileId = fdMatch[1];
-        else if (lhMatch)  fileId = lhMatch[1];
+        if (driveUrl.includes('id=')) {
+            fileId = driveUrl.split('id=')[1].split('&')[0];
+        } else if (driveUrl.includes('/d/')) {
+            fileId = driveUrl.split('/d/')[1].split('/')[0];
+        }
 
         if (!fileId) return null;
 
-        // Usar Drive API v3 para descargar el contenido del archivo
-        const apiUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-        const r = await fetch(apiUrl, {
+        // Petición a la API de Drive para obtener el contenido binario
+        const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
             headers: { 'Authorization': 'Bearer ' + token }
         });
 
         if (!r.ok) return null;
 
-        const blob   = await r.blob();
-        const reader = new FileReader();
+        const blob = await r.blob();
         return await new Promise(resolve => {
-            reader.onload  = e => resolve(e.target.result);
-            reader.onerror = () => resolve(null);
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
             reader.readAsDataURL(blob);
         });
     } catch(e) {
-        console.warn('loadDrivePhotoAsBase64 error:', e);
+        console.error('Error cargando foto de Drive:', e);
         return null;
     }
 }
-
 function openQRModal(studentId) {
     const s = APP.db.students.find(s => s.id === studentId);
     if (!s) return;
@@ -1396,15 +1387,14 @@ function openQRModal(studentId) {
     if (cachedPhoto) {
         setPhotoSrc(photoInner, cachedPhoto);
         APP.lastStudent.photo = cachedPhoto;
-    } else if (s.photoUrl && s.photoUrl.startsWith('http')) {
-        // Intentar con auth token, sin bloquear la UI
+    } else if (s.photoUrl && s.photoUrl.includes('google.com')) {
+        // Intentar cargar de Drive
         loadDrivePhotoAsBase64(s.photoUrl, studentId).then(b64 => {
             if (b64) {
                 photoCache[studentId]  = b64;
                 APP.lastStudent.photo  = b64;
-                setPhotoSrc(photoInner, b64);
+                setPhotoSrc(photoInner, b64); // Fuerza la imagen sobre las iniciales
             }
-            // Si falla, el placeholder ya está visible — no hacer nada
         });
     }
 
