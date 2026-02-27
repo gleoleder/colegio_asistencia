@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#1b2e4a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Sistema de Asistencia QR — Colegio San Agustín</title>
+
+    <!-- Librerías externas -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script async defer src="https://apis.google.com/js/api.js" onload="onGapiLoad()"></script>
+    <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoad()"></script>
+
+    <!-- Fuentes -->
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Estilos -->
+    <link rel="stylesheet" href="css/styles.css">
+
+    <!-- Configuración -->
+    <script src="js/config.js"></script>
+</head>
+<body>
+
+    <!-- ═══════ ENCABEZADO ═══════ -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">🎓</div>
+            <div>
+                <h1>San Agustín</h1>
+                <small>Asistencia Escolar</small>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="chip chip-g" id="syncChip">⏳ Cargando...</div>
+            <button class="btn-auth" id="authBtn" onclick="handleAuth()" style="display:none">
+                🔑 Conectar Google
+            </button>
+            <button class="btn-auth" id="logoutBtn" onclick="handleSignout()" style="display:none">
+                Cerrar sesión
+            </button>
+        </div>
+    </header>
+
+    <!-- ═══════ NAVEGACIÓN ═══════ -->
+    <nav class="nav" id="navBar">
+        <button class="nav-btn active" data-panel="register">📝 Registrar</button>
+        <button class="nav-btn" data-panel="scanner">📷 Escanear</button>
+        <button class="nav-btn" data-panel="students">👥 Alumnos</button>
+        <button class="nav-btn" data-panel="attendance">📊 Asistencia</button>
+        <button class="nav-btn" data-panel="reports">📋 Reportes</button>
+    </nav>
+
+    <!-- ═══════ CONTENIDO PRINCIPAL ═══════ -->
+    <main class="main">
+
+        <!-- ── PANEL: REGISTRAR ── -->
+        <section id="panel-register" class="panel active">
+            <div class="card">
+                <div class="card-title">📋 Registrar Nuevo Alumno</div>
+                <form id="regForm" onsubmit="doRegister(event)">
+                    <div class="form-grid">
+                        <div class="field full">
+                            <label>Foto del alumno</label>
+                            <div class="photo-row">
+                                <div class="photo-circle" id="photoCircle" onclick="document.getElementById('photoFile').click()">📷</div>
+                                <input type="file" id="photoFile" accept="image/*" style="display:none" onchange="loadPhoto(this)">
+                                <small style="color:var(--txt3)">Toca para agregar foto (opcional)</small>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label>Nombre completo *</label>
+                            <input type="text" id="inputName" required placeholder="Ej: Juan Pérez López">
+                        </div>
+                        <div class="field">
+                            <label>DNI / Documento *</label>
+                            <input type="text" id="inputDni" required placeholder="Ej: 12345678">
+                        </div>
+                        <div class="field">
+                            <label>Grado *</label>
+                            <select id="inputGrade" required>
+                                <option value="">Seleccionar...</option>
+                                <option>1° Primaria</option>
+                                <option>2° Primaria</option>
+                                <option>3° Primaria</option>
+                                <option>4° Primaria</option>
+                                <option>5° Primaria</option>
+                                <option>6° Primaria</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Sección *</label>
+                            <select id="inputSection" required>
+                                <option value="">Seleccionar...</option>
+                                <option>A</option>
+                                <option>B</option>
+                                <option>C</option>
+                            </select>
+                        </div>
+                        <div class="field full">
+                            <button type="submit" class="btn btn-blue btn-block">
+                                📱 Registrar y Generar Código QR
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- QR generado -->
+                <div class="qr-container" id="qrcode"></div>
+                <p class="qr-status" id="qrStatus"></p>
+                <div class="qr-actions" id="qrActions">
+                    <button class="btn btn-blue btn-sm" onclick="downloadPDF()">📄 Descargar Carnet PDF</button>
+                    <button class="btn btn-ghost btn-sm" onclick="downloadQRPng()">🖼️ Descargar QR</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">🕐 Últimos Registros</div>
+                <div id="recentList"></div>
+            </div>
+        </section>
+
+        <!-- ── PANEL: ESCÁNER ── -->
+        <section id="panel-scanner" class="panel">
+            <div class="card">
+                <div class="card-title">📷 Escáner de Asistencia</div>
+                <div class="scan-mode-selector">
+                    <label class="mode-entrada">
+                        <input type="radio" name="scanMode" value="ENTRADA" checked>
+                        <span>🟢 Entrada</span>
+                    </label>
+                    <label class="mode-salida">
+                        <input type="radio" name="scanMode" value="SALIDA">
+                        <span>🔴 Salida</span>
+                    </label>
+                </div>
+                <div id="reader"></div>
+                <div id="scanFeedback"></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">📋 Registros de Hoy</div>
+                <div id="todayLog"></div>
+            </div>
+        </section>
+
+        <!-- ── PANEL: ALUMNOS ── -->
+        <section id="panel-students" class="panel">
+            <input type="text" id="searchBox" class="search-box" placeholder="🔍 Buscar alumno por nombre o DNI..." oninput="renderStudentsTable()">
+            <div class="card">
+                <div class="card-title">👥 Lista de Alumnos</div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Alumno</th>
+                                <th>DNI</th>
+                                <th>Estado Hoy</th>
+                                <th>QR</th>
+                            </tr>
+                        </thead>
+                        <tbody id="studentsBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── PANEL: ASISTENCIA ── -->
+        <section id="panel-attendance" class="panel">
+            <div class="stats-grid">
+                <div class="stat-card blue">
+                    <div class="stat-label">Total Alumnos</div>
+                    <div class="stat-value" id="statTotal">0</div>
+                </div>
+                <div class="stat-card green">
+                    <div class="stat-label">Presentes Hoy</div>
+                    <div class="stat-value" id="statPresent">0</div>
+                </div>
+                <div class="stat-card red">
+                    <div class="stat-label">Ausentes Hoy</div>
+                    <div class="stat-value" id="statAbsent">0</div>
+                </div>
+                <div class="stat-card amber">
+                    <div class="stat-label">Salidas Registradas</div>
+                    <div class="stat-value" id="statExits">0</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">📊 Resumen del Día</div>
+                <div id="todayLog2"></div>
+            </div>
+        </section>
+
+        <!-- ── PANEL: REPORTES ── -->
+        <section id="panel-reports" class="panel">
+            <div class="card">
+                <div class="card-title">📋 Generar Reporte de Asistencia</div>
+
+                <div class="report-filters">
+                    <div class="field">
+                        <label>Fecha</label>
+                        <input type="date" id="reportDate" onchange="renderReports()">
+                    </div>
+                    <div class="field">
+                        <label>Grado</label>
+                        <select id="reportGrade" onchange="renderReports()">
+                            <option value="">Todos</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Sección</label>
+                        <select id="reportSection" onchange="renderReports()">
+                            <option value="">Todas</option>
+                            <option>A</option>
+                            <option>B</option>
+                            <option>C</option>
+                        </select>
+                    </div>
+                    <div class="field" style="justify-content:flex-end">
+                        <label>&nbsp;</label>
+                        <button class="btn btn-green btn-sm" onclick="downloadReport()">
+                            📄 Descargar PDF
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Resumen del reporte -->
+                <div class="stats-grid" style="margin-bottom:14px">
+                    <div class="stat-card blue">
+                        <div class="stat-label">Total</div>
+                        <div class="stat-value" id="reportTotal">0</div>
+                    </div>
+                    <div class="stat-card green">
+                        <div class="stat-label">Presentes</div>
+                        <div class="stat-value" id="reportPresent">0</div>
+                    </div>
+                    <div class="stat-card red">
+                        <div class="stat-label">Ausentes</div>
+                        <div class="stat-value" id="reportAbsent">0</div>
+                    </div>
+                    <div class="stat-card amber">
+                        <div class="stat-label">Salidas</div>
+                        <div class="stat-value" id="reportExits">0</div>
+                    </div>
+                </div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Alumno</th>
+                                <th>Grado</th>
+                                <th>Estado</th>
+                                <th>Entrada</th>
+                                <th>Salida</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reportBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">🕐 Horarios del Día</div>
+                <div id="scheduleToday"></div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ═══════ NOTIFICACIONES CENTRALES ═══════ -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- ═══════ MODAL QR ═══════ -->
+    <div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal">
+            <h3 id="modalName"></h3>
+            <p class="modal-sub" id="modalInfo"></p>
+            <div class="qr-wrap" id="modalQR"></div>
+            <div class="modal-btns">
+                <button class="btn btn-blue btn-sm" onclick="downloadPDFFromModal()">📄 Carnet PDF</button>
+                <button class="btn btn-red btn-sm" onclick="closeModal()">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lógica principal -->
+    <script src="js/script.js"></script>
+</body>
+</html>
