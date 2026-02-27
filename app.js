@@ -91,60 +91,52 @@ function checkReady() {
 function handleAuth() {
     APP.tokenClient.callback = async (resp) => {
         if (resp.error) {
-            console.error('Error en OAuth:', resp);
+            console.error('Error OAuth:', resp);
+            showToast('bad', 'Error de conexión', 'No se pudo conectar con Google. Intenta de nuevo.');
             return;
         }
-        APP.authed = true;
 
-        // Obtener info del usuario — intentar varias formas
-        try {
-            // Forma 1: userinfo endpoint
-            const profile = await gapi.client.request({
-                path: 'https://www.googleapis.com/oauth2/v3/userinfo'
-            });
-            APP.currentUser = {
-                email: profile.result.email,
-                name:  profile.result.name || profile.result.email
-            };
-        } catch(e) {
-            try {
-                // Forma 2: decodificar el JWT del token de credencial de Google
-                const credential = resp.credential;
-                if (credential) {
-                    const payload = JSON.parse(atob(credential.split('.')[1]));
-                    APP.currentUser = { email: payload.email, name: payload.name || payload.email };
-                } else {
-                    // Forma 3: pedir el token actual y decodificarlo
-                    const token = gapi.client.getToken();
-                    if (token && token.id_token) {
-                        const payload = JSON.parse(atob(token.id_token.split('.')[1]));
-                        APP.currentUser = { email: payload.email, name: payload.name || payload.email };
-                    } else {
-                        // Forma 4: segunda llamada directa con fetch
-                        const accessToken = gapi.client.getToken().access_token;
-                        const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                            headers: { Authorization: 'Bearer ' + accessToken }
-                        });
-                        const data = await res.json();
-                        APP.currentUser = { email: data.email, name: data.name || data.email };
-                    }
-                }
-            } catch(e2) {
-                console.error('No se pudo obtener el email del usuario:', e2);
-                showToast('bad', 'Error de autenticación', 'No se pudo obtener tu correo de Google. Intenta de nuevo.');
-                handleSignout();
-                return;
-            }
+        // Obtener el access_token directamente de la respuesta
+        const accessToken = resp.access_token || gapi.client.getToken()?.access_token;
+        if (!accessToken) {
+            showToast('bad', 'Error', 'No se obtuvo token de acceso. Intenta de nuevo.');
+            return;
         }
 
-        console.log('Usuario autenticado:', APP.currentUser);
+        // Obtener email con fetch directo — el método más confiable
+        let userEmail = null;
+        let userName  = null;
+        try {
+            const r    = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { 'Authorization': 'Bearer ' + accessToken }
+            });
+            const data = await r.json();
+            userEmail  = (data.email || '').toLowerCase().trim();
+            userName   = data.name || userEmail;
+            console.log('Email obtenido de Google:', userEmail);
+        } catch(e) {
+            console.error('Error obteniendo userinfo:', e);
+            showToast('bad', 'Error', 'No se pudo obtener tu correo de Google. Verifica tu conexión.');
+            return;
+        }
 
-        document.getElementById('authBtn').style.display = 'none';
-        document.getElementById('logoutBtn').style.display = 'inline-flex';
+        if (!userEmail) {
+            showToast('bad', 'Error', 'Google no devolvió un correo válido. Intenta de nuevo.');
+            return;
+        }
+
+        APP.authed      = true;
+        APP.currentUser = { email: userEmail, name: userName };
+
+        document.getElementById('authBtn').style.display    = 'none';
+        document.getElementById('logoutBtn').style.display  = 'inline-flex';
         syncStatus('ok', '✅ Conectado');
+
+        // Cargar datos desde Sheets y luego verificar permisos
         await loadFromSheets();
         checkUserPermission();
     };
+
     const token = gapi.client.getToken();
     APP.tokenClient.requestAccessToken(token === null ? { prompt: 'consent' } : { prompt: '' });
 }
