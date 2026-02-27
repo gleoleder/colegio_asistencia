@@ -2,62 +2,6 @@
 // app.js — Sistema de Asistencia QR · Instituto CEAN
 // ============================================================
 
-// ─── TRADUCCIÓN ESCÁNER ──────────────────────────────────────
-const SCAN_TRANSLATIONS = {
-    'Start Scanning': '📷 Iniciar Cámara',
-    'Stop Scanning': '⏹ Detener',
-    'Request Camera Permissions': '🔓 Permitir Cámara',
-    'No Camera Found': '⚠️ Sin cámara',
-    'Select Camera': '🎥 Seleccionar cámara',
-    'Or drop an image': '— o arrastra una imagen —',
-    'Select Image': '🖼️ Seleccionar Imagen',
-    'Scan an Image File': '🖼️ Seleccionar Imagen',
-    'Use Camera': '📷 Usar Cámara',
-    'Switch To Scanning Using Camera': '📷 Usar Cámara',
-    'Switch To Scanning Using Image': '🖼️ Usar Imagen',
-    'No Devices Found': 'Sin dispositivos',
-    'Checking...': 'Verificando...',
-    'Idle': 'Esperando',
-    'Loading': 'Cargando...',
-    'No image chosen': 'Sin imagen',
-    'Choose file': 'Elegir archivo',
-    'No file chosen': 'Sin archivo',
-};
-
-function translateNode(node) {
-    if (node.nodeType === Node.TEXT_NODE) {
-        const txt = node.textContent.trim();
-        if (SCAN_TRANSLATIONS[txt]) node.textContent = node.textContent.replace(txt, SCAN_TRANSLATIONS[txt]);
-    }
-}
-function translateScannerUI(root) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-        const txt = node.textContent.trim();
-        if (SCAN_TRANSLATIONS[txt]) node.textContent = node.textContent.replace(txt, SCAN_TRANSLATIONS[txt]);
-    }
-    root.querySelectorAll('button, input[type="button"]').forEach(el => {
-        const v = (el.value || el.textContent || '').trim();
-        if (SCAN_TRANSLATIONS[v]) { if (el.value) el.value = SCAN_TRANSLATIONS[v]; else el.textContent = SCAN_TRANSLATIONS[v]; }
-    });
-    root.querySelectorAll('a').forEach(a => { const t = a.textContent.trim(); if (SCAN_TRANSLATIONS[t]) a.textContent = SCAN_TRANSLATIONS[t]; });
-}
-let scanObserver = null;
-function watchScannerTranslations() {
-    const reader = document.getElementById('reader');
-    if (!reader) return;
-    translateScannerUI(reader);
-    if (scanObserver) scanObserver.disconnect();
-    scanObserver = new MutationObserver(mutations => {
-        mutations.forEach(m => {
-            m.addedNodes.forEach(n => { if (n.nodeType === Node.ELEMENT_NODE) translateScannerUI(n); else translateNode(n); });
-            if (m.type === 'characterData') translateNode(m.target);
-        });
-    });
-    scanObserver.observe(reader, { childList: true, subtree: true, characterData: true });
-}
-
 // ─── UTILIDADES ──────────────────────────────────────────────
 function getToday() { return new Date().toISOString().split('T')[0]; }
 function getTime()  { return new Date().toLocaleTimeString('es-BO', { hour12: false }); }
@@ -67,21 +11,52 @@ function getAvatarColor(name) {
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
 }
-function getInitials(name) { return name.split(' ').map(w => w[0]).join('').substring(0,2).toUpperCase(); }
+function getInitials(name) { return (name||'?').split(' ').map(w=>w[0]).join('').substring(0,2).toUpperCase(); }
 function capitalize(str)   { return str ? str.charAt(0).toUpperCase() + str.slice(1) : str; }
 
 // ─── TOAST ───────────────────────────────────────────────────
 function showToast(type, title, message) {
     const container = document.getElementById('toastContainer');
-    const icons = { ok: '✅', bad: '❌', warn: '⚠️', info: 'ℹ️' };
+    if (!container) return;
+    const icons = { ok:'✅', bad:'❌', warn:'⚠️', info:'ℹ️' };
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    toast.innerHTML = `<div class="toast-icon">${icons[type]||''}</div><h4>${title}</h4><p>${message}</p>`;
+    toast.innerHTML = `<div class="toast-icon">${icons[type]||''}</div><div><h4>${title}</h4><p>${message}</p></div>`;
     container.appendChild(toast);
-    setTimeout(() => { toast.classList.add('toast-out'); setTimeout(() => toast.remove(), 300); }, 3200);
+    setTimeout(() => { toast.classList.add('toast-out'); setTimeout(() => toast.remove(), 300); }, 3500);
 }
 
-// ─── PANTALLA DE LOGIN — HELPERS ─────────────────────────────
+// ─── SESIÓN PERSISTENTE ──────────────────────────────────────
+const SESSION_KEY = 'cean_session_v1';
+
+function saveSession(user, accessToken) {
+    const session = {
+        email:       user.email,
+        name:        user.name,
+        role:        user.role,
+        accessToken: accessToken,
+        savedAt:     Date.now()
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+}
+
+function loadSession() {
+    try {
+        const raw = localStorage.getItem(SESSION_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        // Token de Google dura ~1 hora; si pasó más de 50 min pedimos nuevo silencioso
+        const age = (Date.now() - (s.savedAt || 0)) / 1000 / 60; // minutos
+        if (age > 50) return null; // expirado, renovar
+        return s;
+    } catch(e) { return null; }
+}
+
+function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+}
+
+// ─── PANTALLA DE LOGIN ───────────────────────────────────────
 function showLoginBtn() {
     document.getElementById('loginLoading').style.display = 'none';
     document.getElementById('loginBtn').style.display     = 'flex';
@@ -113,8 +88,8 @@ function showLogin() {
 function syncStatus(type, text) {
     const el = document.getElementById('syncChip');
     if (!el) return;
-    el.className    = 'chip ' + (type === 'ok' ? 'chip-ok' : type === 'err' ? 'chip-err' : 'chip-g');
-    el.textContent  = text;
+    el.className   = 'chip ' + (type==='ok' ? 'chip-ok' : type==='err' ? 'chip-err' : 'chip-g');
+    el.textContent = text;
 }
 
 // ─── ALMACENAMIENTO LOCAL ────────────────────────────────────
@@ -123,135 +98,146 @@ function saveLocal() {
 }
 function loadLocal() {
     try {
-        const saved = localStorage.getItem(CONFIG.STORAGE_KEY);
-        if (saved) {
-            const parsed      = JSON.parse(saved);
-            APP.db.students   = parsed.students   || [];
-            APP.db.attendance = parsed.attendance || [];
-            APP.db.courses    = parsed.courses    || [];
-            APP.db.schedules  = parsed.schedules  || [];
-            // Los permisos NUNCA se cargan del localStorage —
-            // siempre vienen frescos de Google Sheets en cada login
-            APP.db.permisos = [];
-        }
-    } catch(e) { console.warn('Error leyendo localStorage:', e); }
+        const raw = localStorage.getItem(CONFIG.STORAGE_KEY);
+        if (!raw) return;
+        const parsed      = JSON.parse(raw);
+        APP.db.students   = parsed.students   || [];
+        APP.db.attendance = parsed.attendance || [];
+        APP.db.courses    = parsed.courses    || [];
+        APP.db.schedules  = parsed.schedules  || [];
+        APP.db.permisos   = [];  // siempre frescos desde Sheets
+    } catch(e) { console.warn('loadLocal error:', e); }
 }
 
-// ─── GOOGLE API — INICIALIZACIÓN ─────────────────────────────
+// ─── GOOGLE API INIT ─────────────────────────────────────────
 function onGapiLoad() {
-    console.log('onGapiLoad disparado');
     gapi.load('client', async () => {
-        try {
-            // Solo inicializar con apiKey — sin discoveryDocs que bloquean
-            await gapi.client.init({ apiKey: CONFIG.API_KEY });
-            console.log('gapi.client listo');
-            APP.gapiOk = true;
-            checkReady();
-        } catch(e) {
-            console.error('Error iniciando GAPI:', e);
-            // Si falla el init, igual marcar como ok para no bloquear
-            // Las llamadas se harán con fetch directo
-            APP.gapiOk = true;
-            checkReady();
-        }
+        try { await gapi.client.init({ apiKey: CONFIG.API_KEY }); } catch(e) {}
+        APP.gapiOk = true;
+        checkReady();
     });
 }
-
 function onGisLoad() {
-    console.log('onGisLoad disparado');
     try {
         APP.tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: CONFIG.CLIENT_ID,
             scope:     CONFIG.SCOPES,
             callback:  ''
         });
-        console.log('tokenClient listo');
         APP.gisOk = true;
         checkReady();
     } catch(e) {
-        console.error('Error iniciando GIS:', e);
-        showLoginError('Error al cargar el login de Google. Recarga la página.');
+        showLoginError('Error al cargar Google. Recarga la página.');
     }
 }
 
-function checkReady() {
-    console.log('checkReady → gapiOk:', APP.gapiOk, '| gisOk:', APP.gisOk);
-    if (APP.gapiOk && APP.gisOk) {
-        showLoginBtn();
+async function checkReady() {
+    if (!APP.gapiOk || !APP.gisOk) return;
+
+    // Intentar restaurar sesión guardada
+    const session = loadSession();
+    if (session) {
+        showLoginLoading('Restaurando sesión...');
+        const ok = await restaurarSesion(session);
+        if (ok) return; // sesión restaurada, no mostrar login
+    }
+    showLoginBtn();
+}
+
+// ─── RESTAURAR SESIÓN (al recargar la página) ─────────────────
+async function restaurarSesion(session) {
+    try {
+        // Verificar que el token sigue siendo válido con userinfo
+        const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { 'Authorization': 'Bearer ' + session.accessToken }
+        });
+        if (!r.ok) return false; // token expirado
+
+        const data      = await r.json();
+        const userEmail = (data.email || '').toLowerCase().trim();
+        if (!userEmail || userEmail !== session.email) return false;
+
+        // Registrar el token en gapi para que sheetsGet lo use
+        gapi.client.setToken({ access_token: session.accessToken });
+
+        showLoginLoading('Verificando permisos...');
+        const permisosOk = await cargarPermisos(session.accessToken);
+        if (!permisosOk) return false;
+
+        const perm = APP.db.permisos.find(p => p.email === userEmail);
+        if (!perm) return false; // ya no tiene permiso
+
+        // Sesión válida
+        APP.authed      = true;
+        APP.currentUser = { email: userEmail, name: session.name || data.name || userEmail, role: perm.rol };
+
+        showLoginLoading('Cargando datos...');
+        await loadFromSheets();
+
+        showApp();
+        configurarUI(perm);
+        populateCourseFilters();
+        refreshAll();
+
+        showToast('ok', `Bienvenido de nuevo, ${APP.currentUser.name}`, `Rol: ${perm.rol}`);
+        return true;
+    } catch(e) {
+        console.warn('No se pudo restaurar sesión:', e);
+        return false;
     }
 }
 
-// ─── AUTENTICACIÓN ───────────────────────────────────────────
+// ─── LOGIN MANUAL ─────────────────────────────────────────────
 function handleAuth() {
     showLoginLoading('Conectando con Google...');
 
     APP.tokenClient.callback = async (resp) => {
         if (resp.error) {
-            console.error('Error OAuth:', resp);
             showLoginError('Error al conectar con Google. Intenta de nuevo.');
             return;
         }
 
+        const accessToken = resp.access_token;
         showLoginLoading('Obteniendo datos de usuario...');
 
-        // Obtener email con fetch directo usando el access_token
-        const accessToken = resp.access_token;
-        let userEmail = null;
-        let userName  = null;
-
+        let userEmail, userName;
         try {
-            const r   = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            const r    = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
                 headers: { 'Authorization': 'Bearer ' + accessToken }
             });
             const data = await r.json();
             userEmail  = (data.email || '').toLowerCase().trim();
             userName   = (data.name  || userEmail).trim();
         } catch(e) {
-            console.error('Error obteniendo userinfo:', e);
             showLoginError('No se pudo obtener tu correo de Google. Verifica tu conexión.');
             return;
         }
 
-        if (!userEmail) {
-            showLoginError('Google no devolvió un correo válido. Intenta de nuevo.');
-            return;
-        }
+        if (!userEmail) { showLoginError('Google no devolvió un correo válido.'); return; }
 
-        console.log('Email autenticado:', userEmail);
-        showLoginLoading('Cargando permisos desde la hoja de cálculo...');
-
-        // Cargar permisos desde Sheets ANTES de verificar acceso
+        showLoginLoading('Verificando permisos...');
         const permisosOk = await cargarPermisos(accessToken);
         if (!permisosOk) {
-            showLoginError('No se pudo leer la hoja de Permisos. Verifica que el ID de hoja sea correcto y que la API esté habilitada.');
+            showLoginError('No se pudo leer la hoja de Permisos. Verifica configuración.');
             return;
         }
 
-        // Verificar si el correo tiene permiso
-        const perm = APP.db.permisos.find(p =>
-            (p.email || '').toLowerCase().trim() === userEmail
-        );
-
+        const perm = APP.db.permisos.find(p => p.email === userEmail);
         if (!perm) {
-            const lista = APP.db.permisos.length
-                ? 'Correos autorizados: ' + APP.db.permisos.map(p => p.email).join(', ')
-                : 'La hoja Permisos está vacía o no se encontraron datos desde la fila 2.';
-            console.warn('Acceso denegado para:', userEmail, '|', lista);
             showLoginError(`"${userEmail}" no tiene permisos. Contacta al administrador.`);
-            // Revocar token para que pueda intentar con otra cuenta
             google.accounts.oauth2.revoke(accessToken);
             gapi.client.setToken('');
             return;
         }
 
-        // ✅ Login exitoso
+        // ✅ Login exitoso — guardar sesión para recargas
         APP.authed      = true;
         APP.currentUser = { email: userEmail, name: userName, role: perm.rol };
+        saveSession(APP.currentUser, accessToken);
 
         showLoginLoading('Cargando datos...');
         await loadFromSheets();
 
-        // Mostrar app y configurar UI
         showApp();
         configurarUI(perm);
         populateCourseFilters();
@@ -260,132 +246,149 @@ function handleAuth() {
         showToast('ok', `Bienvenido, ${userName}`, `Rol: ${perm.rol}`);
     };
 
-    APP.tokenClient.requestAccessToken({ prompt: 'select_account' });
+    APP.tokenClient.requestAccessToken({ prompt: '' });
 }
 
-// Carga SOLO los permisos desde Sheets (para verificar antes de mostrar la app)
+// ─── CARGAR SOLO PERMISOS ─────────────────────────────────────
 async function cargarPermisos(accessToken) {
     try {
         const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(CONFIG.RANGES.PERMISOS)}`;
-        const r   = await fetch(url, {
-            headers: { 'Authorization': 'Bearer ' + accessToken }
-        });
-        if (!r.ok) {
-            console.error('Error HTTP al cargar Permisos:', r.status, await r.text());
-            return false;
-        }
+        const r   = await fetch(url, { headers: { 'Authorization': 'Bearer ' + accessToken } });
+        if (!r.ok) return false;
         const data = await r.json();
         APP.db.permisos = (data.values || [])
-            .filter(row => row[0] && row[0].toString().trim() !== '')
+            .filter(row => row[0] && row[0].toString().trim())
             .map(row => ({
                 email:  row[0].toString().trim().toLowerCase(),
                 nombre: (row[1] || '').toString().trim(),
                 rol:    (row[2] || 'VIEWER').toString().trim().toUpperCase()
             }));
-        console.log('Permisos cargados:', APP.db.permisos);
         return true;
-    } catch(e) {
-        console.error('Error cargando permisos:', e);
-        return false;
-    }
+    } catch(e) { return false; }
 }
 
+// ─── CONFIGURAR UI POST LOGIN ─────────────────────────────────
 function configurarUI(perm) {
-    // Badge del usuario en el header
-    const badge   = document.getElementById('userBadge');
-    const avatarEl = document.getElementById('userAvatar');
-    const emailEl  = document.getElementById('userEmail');
-    const roleEl   = document.getElementById('userRole');
+    document.getElementById('userBadge').style.display  = 'flex';
+    document.getElementById('logoutBtn').style.display  = 'inline-flex';
+    document.getElementById('userAvatar').textContent   = (APP.currentUser.name || APP.currentUser.email)[0].toUpperCase();
+    document.getElementById('userEmail').textContent    = APP.currentUser.name || APP.currentUser.email;
+    document.getElementById('userRole').textContent     = perm.rol;
+    document.getElementById('userRole').className       = `role-tag role-${perm.rol}`;
+    syncStatus('ok', '✅ Conectado');
 
-    badge.style.display     = 'flex';
-    avatarEl.textContent    = (APP.currentUser.name || APP.currentUser.email)[0].toUpperCase();
-    emailEl.textContent     = APP.currentUser.name || APP.currentUser.email;
-    roleEl.textContent      = perm.rol;
-    roleEl.className        = `role-tag role-${perm.rol}`;
-
-    document.getElementById('logoutBtn').style.display = 'inline-flex';
-    syncStatus('ok', '✅ Sincronizado');
-
-    // Mostrar solo los botones de navegación permitidos para este rol
+    // Mostrar botones según rol
     document.querySelectorAll('.nav-btn').forEach(btn => {
         const allowed = (btn.dataset.role || '').split(',');
         btn.style.display = allowed.includes(perm.rol) ? 'flex' : 'none';
     });
 
-    // Activar el primer panel visible
-    const primerBtn = document.querySelector('.nav-btn[style*="flex"]');
-    if (primerBtn) {
+    // Activar primer panel visible
+    const primer = document.querySelector('.nav-btn[style*="flex"]');
+    if (primer) {
         document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-        primerBtn.classList.add('active');
-        const panelId = 'panel-' + primerBtn.dataset.panel;
-        const panel   = document.getElementById(panelId);
+        primer.classList.add('active');
+        const panel = document.getElementById('panel-' + primer.dataset.panel);
         if (panel) panel.classList.add('active');
     }
 }
 
+// ─── CERRAR SESIÓN ───────────────────────────────────────────
 function handleSignout() {
     stopScanner();
-    const token = gapi.client.getToken();
-    if (token) {
-        google.accounts.oauth2.revoke(token.access_token);
-        gapi.client.setToken('');
-    }
+    clearSession();
+    try {
+        const token = gapi.client.getToken();
+        if (token) { google.accounts.oauth2.revoke(token.access_token); gapi.client.setToken(''); }
+    } catch(e) {}
     APP.authed      = false;
     APP.currentUser = null;
     APP.db.permisos = [];
     showLogin();
 }
 
-// ─── CARGA COMPLETA DESDE GOOGLE SHEETS ──────────────────────
+// ─── SHEETS API — fetch directo ───────────────────────────────
+function getToken() {
+    try { return gapi.client.getToken()?.access_token || null; } catch(e) { return null; }
+}
+
+async function sheetsGet(range) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}`;
+    const r     = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!r.ok) throw new Error(`sheetsGet ${range} → ${r.status}`);
+    return (await r.json()).values || [];
+}
+async function sheetsAppend(range, values) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED`;
+    const r     = await fetch(url, {
+        method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+        body: JSON.stringify({ values })
+    });
+    if (!r.ok) throw new Error(`sheetsAppend ${range} → ${r.status}`);
+    return r.json();
+}
+async function sheetsClear(range) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}:clear`;
+    const r     = await fetch(url, { method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'} });
+    if (!r.ok) throw new Error(`sheetsClear → ${r.status}`);
+    return r.json();
+}
+async function sheetsUpdate(range, values) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`;
+    const r     = await fetch(url, {
+        method:'PUT', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+        body: JSON.stringify({ values })
+    });
+    if (!r.ok) throw new Error(`sheetsUpdate → ${r.status}`);
+    return r.json();
+}
+
+// ─── CARGA DESDE GOOGLE SHEETS ───────────────────────────────
 async function loadFromSheets() {
-    syncStatus('g', '🔄 Cargando...');
+    syncStatus('g','🔄 Cargando...');
     try {
-        // Estudiantes
         try {
             const rows = await sheetsGet(CONFIG.RANGES.ESTUDIANTES);
             APP.db.students = rows.map(r => ({
-                id: r[0]||'', name: r[1]||'', dni: r[2]||'', email: r[3]||'',
-                phone: r[4]||'', course: r[5]||'', schedule: r[6]||'',
-                photoUrl: r[7]||'', qrUrl: r[8]||'', createdAt: r[9]||'',
-                registeredBy: r[10]||''
+                id:r[0]||'', name:r[1]||'', dni:r[2]||'', email:r[3]||'',
+                phone:r[4]||'', course:r[5]||'', schedule:r[6]||'',
+                photoUrl:r[7]||'', qrUrl:r[8]||'', createdAt:r[9]||'', registeredBy:r[10]||''
             }));
         } catch(e) { console.warn('Estudiantes:', e); }
 
-        // Asistencia
         try {
             const rows = await sheetsGet(CONFIG.RANGES.ASISTENCIA);
             APP.db.attendance = rows.map(r => ({
-                sid: r[0]||'', name: r[1]||'', dni: r[2]||'', course: r[3]||'',
-                schedule: r[4]||'', date: r[5]||'', time: r[6]||'',
-                type: r[7]||'', registeredBy: r[8]||''
+                sid:r[0]||'', name:r[1]||'', dni:r[2]||'', course:r[3]||'',
+                schedule:r[4]||'', date:r[5]||'', time:r[6]||'', type:r[7]||'', registeredBy:r[8]||''
             }));
         } catch(e) { console.warn('Asistencia:', e); }
 
-        // Cursos
         try {
             const rows = await sheetsGet(CONFIG.RANGES.CURSOS);
             APP.db.courses = rows.map(r => ({
-                id: r[0]||'', name: r[1]||'', grade: r[2]||'',
-                active: (r[3]||'SI').toUpperCase() === 'SI',
-                description: r[4]||''
+                id:r[0]||'', name:r[1]||'', grade:r[2]||'',
+                active:(r[3]||'SI').toUpperCase()==='SI', description:r[4]||''
             }));
         } catch(e) { console.warn('Cursos:', e); }
 
-        // Horarios
         try {
             const rows = await sheetsGet(CONFIG.RANGES.HORARIOS);
             APP.db.schedules = rows.map(r => ({
-                courseId: r[0]||'', courseName: r[1]||'', day: r[2]||'',
-                startTime: r[3]||'', endTime: r[4]||'', room: r[5]||''
+                courseId:r[0]||'', courseName:r[1]||'', day:r[2]||'',
+                startTime:r[3]||'', endTime:r[4]||'', room:r[5]||''
             }));
         } catch(e) { console.warn('Horarios:', e); }
 
-        // Permisos (actualizar lista en memoria para la UI de gestión)
         try {
             const rows = await sheetsGet(CONFIG.RANGES.PERMISOS);
             APP.db.permisos = rows
-                .filter(r => r[0] && r[0].toString().trim() !== '')
+                .filter(r => r[0]?.toString().trim())
                 .map(r => ({
                     email:  r[0].toString().trim().toLowerCase(),
                     nombre: (r[1]||'').toString().trim(),
@@ -394,79 +397,25 @@ async function loadFromSheets() {
         } catch(e) { console.warn('Permisos:', e); }
 
         saveLocal();
-        syncStatus('ok', '✅ Sincronizado');
+        syncStatus('ok','✅ Sincronizado');
     } catch(e) {
-        console.error('Error general al cargar:', e);
-        syncStatus('err', '❌ Error de conexión');
+        console.error('loadFromSheets error:', e);
+        syncStatus('err','❌ Error de conexión');
     }
-}
-
-// ─── SHEETS API — fetch directo (sin gapi.client.sheets) ─────
-function getToken() {
-    const t = gapi.client.getToken();
-    return t ? t.access_token : null;
-}
-
-async function sheetsGet(range) {
-    const token = getToken();
-    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}`;
-    const r     = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
-    if (!r.ok) throw new Error(`sheetsGet ${range} → HTTP ${r.status}`);
-    return (await r.json()).values || [];
-}
-
-async function sheetsAppend(range, values) {
-    const token = getToken();
-    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED`;
-    const r     = await fetch(url, {
-        method:  'POST',
-        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ values })
-    });
-    if (!r.ok) throw new Error(`sheetsAppend ${range} → HTTP ${r.status}`);
-    return r.json();
-}
-
-async function sheetsClear(range) {
-    const token = getToken();
-    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}:clear`;
-    const r     = await fetch(url, {
-        method:  'POST',
-        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
-    });
-    if (!r.ok) throw new Error(`sheetsClear ${range} → HTTP ${r.status}`);
-    return r.json();
-}
-
-async function sheetsUpdate(range, values) {
-    const token = getToken();
-    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`;
-    const r     = await fetch(url, {
-        method:  'PUT',
-        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ values })
-    });
-    if (!r.ok) throw new Error(`sheetsUpdate ${range} → HTTP ${r.status}`);
-    return r.json();
 }
 
 // ─── SUBIR A DRIVE ───────────────────────────────────────────
 async function uploadToDrive(fileName, base64Data, mimeType) {
-    if (!APP.authed) return '';
     try {
-        const rawBase64 = base64Data.split(',')[1];
-        const metadata  = JSON.stringify({ name: fileName, parents: [CONFIG.FOLDER_ID], mimeType });
-        const body = `--boundary\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--boundary\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${rawBase64}\r\n--boundary--`;
-        const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-            method:  'POST',
-            headers: {
-                'Authorization': 'Bearer ' + gapi.client.getToken().access_token,
-                'Content-Type':  'multipart/related; boundary=boundary'
-            },
-            body
+        const token    = getToken();
+        const rawB64   = base64Data.split(',')[1];
+        const metadata = JSON.stringify({ name: fileName, parents: [CONFIG.FOLDER_ID], mimeType });
+        const body     = `--b\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--b\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${rawB64}\r\n--b--`;
+        const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'multipart/related; boundary=b'}, body
         });
-        const file = await res.json();
-        return file.id ? `https://drive.google.com/uc?export=view&id=${file.id}` : '';
+        const f = await r.json();
+        return f.id ? `https://drive.google.com/uc?export=view&id=${f.id}` : '';
     } catch(e) { return ''; }
 }
 
@@ -475,14 +424,13 @@ function loadPhoto(input) {
     const file = input.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = e => {
         const img = new Image();
         img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width  = CONFIG.PHOTO.WIDTH;
-            canvas.height = CONFIG.PHOTO.HEIGHT;
-            canvas.getContext('2d').drawImage(img, 0, 0, CONFIG.PHOTO.WIDTH, CONFIG.PHOTO.HEIGHT);
-            APP.currentPhoto = canvas.toDataURL('image/jpeg', CONFIG.PHOTO.QUALITY);
+            const c = document.createElement('canvas');
+            c.width = CONFIG.PHOTO.WIDTH; c.height = CONFIG.PHOTO.HEIGHT;
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            APP.currentPhoto = c.toDataURL('image/jpeg', CONFIG.PHOTO.QUALITY);
             document.getElementById('photoCircle').innerHTML = `<img src="${APP.currentPhoto}" alt="Foto">`;
         };
         img.src = e.target.result;
@@ -500,38 +448,30 @@ function updateScheduleOptions() {
         scheduleSelect.innerHTML = '<option value="">Primero selecciona un curso</option>';
         return;
     }
-
-    const course   = APP.db.courses.find(c => c.name === courseName);
-    const courseId = course ? course.id : null;
-    const schedules = APP.db.schedules.filter(s =>
-        s.courseName === courseName || s.courseId === courseId
-    );
+    const course     = APP.db.courses.find(c => c.name === courseName);
+    const courseId   = course ? course.id : null;
+    const schedules  = APP.db.schedules.filter(s => s.courseName === courseName || s.courseId === courseId);
 
     if (!schedules.length) {
         scheduleSelect.innerHTML = '<option value="">Sin horarios disponibles</option>';
         return;
     }
-
-    // Agrupar por bloque de horario (hora + aula)
-    const blockGroups = {};
+    const groups = {};
     schedules.forEach(s => {
         const key = `${s.startTime}-${s.endTime}|${s.room||''}`;
-        if (!blockGroups[key]) blockGroups[key] = { start: s.startTime, end: s.endTime, room: s.room, days: [] };
-        blockGroups[key].days.push(s.day);
+        if (!groups[key]) groups[key] = { start:s.startTime, end:s.endTime, room:s.room, days:[] };
+        groups[key].days.push(s.day);
     });
-
     scheduleSelect.innerHTML = '<option value="">Seleccionar horario...</option>';
-    Object.values(blockGroups).forEach(block => {
-        const daysStr = block.days.map(capitalize).join(', ');
-        const label   = `${daysStr}: ${block.start}–${block.end}${block.room ? ' · ' + block.room : ''}`;
-        const opt     = document.createElement('option');
-        opt.value     = label;
-        opt.textContent = label;
+    Object.values(groups).forEach(b => {
+        const label = `${b.days.map(capitalize).join(', ')}: ${b.start}–${b.end}${b.room?' · '+b.room:''}`;
+        const opt = document.createElement('option');
+        opt.value = opt.textContent = label;
         scheduleSelect.appendChild(opt);
     });
 }
 
-// ─── REGISTRO DE ESTUDIANTE ──────────────────────────────────
+// ─── REGISTRO ESTUDIANTE ─────────────────────────────────────
 async function doRegister(event) {
     event.preventDefault();
     const qrDiv = document.getElementById('qrcode');
@@ -545,24 +485,21 @@ async function doRegister(event) {
         phone:        document.getElementById('inputPhone').value.trim(),
         course:       document.getElementById('inputCourse').value,
         schedule:     document.getElementById('inputSchedule').value,
-        photoUrl:     '',
-        qrUrl:        '',
+        photoUrl:'', qrUrl:'',
         createdAt:    new Date().toISOString(),
-        registeredBy: APP.currentUser ? APP.currentUser.email : 'local'
+        registeredBy: APP.currentUser?.email || 'local'
     };
 
     if (APP.db.students.find(s => s.dni === student.dni)) {
-        showToast('bad', 'Carnet duplicado', 'Este número de carnet ya está registrado.');
-        return;
+        showToast('bad','Carnet duplicado','Este número de carnet ya está registrado.'); return;
     }
     if (!student.course || !student.schedule) {
-        showToast('warn', 'Faltan datos', 'Selecciona el curso y el horario.');
-        return;
+        showToast('warn','Faltan datos','Selecciona el curso y el horario.'); return;
     }
 
     new QRCode(qrDiv, { text: JSON.stringify({ id: student.id }), width: 180, height: 180, correctLevel: QRCode.CorrectLevel.H });
     document.getElementById('qrActions').classList.add('visible');
-    APP.lastStudent = { ...student, photo: APP.currentPhoto, photoUrl: APP.currentPhoto || '' };
+    APP.lastStudent = { ...student, photo: APP.currentPhoto, photoUrl: APP.currentPhoto||'' };
 
     await new Promise(r => setTimeout(r, 500));
 
@@ -577,91 +514,291 @@ async function doRegister(event) {
             student.course, student.schedule, student.photoUrl, student.qrUrl,
             student.createdAt, student.registeredBy
         ]]);
-        showToast('ok', 'Registrado', `${student.name} registrado por ${student.registeredBy}`);
         document.getElementById('qrStatus').textContent = '✅ Registrado y sincronizado';
+        showToast('ok','Registrado',`${student.name} · ${student.registeredBy.split('@')[0]}`);
     } else {
-        showToast('info', 'Guardado localmente', `${student.name} registrado sin conexión.`);
         document.getElementById('qrStatus').textContent = '✅ Registrado localmente';
+        showToast('info','Guardado local',`${student.name} sin conexión.`);
     }
 
     APP.db.students.push(student);
-    saveLocal();
-    refreshAll();
+    saveLocal(); refreshAll();
     document.getElementById('regForm').reset();
     document.getElementById('photoCircle').innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8c95a3" stroke-width="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
     document.getElementById('inputSchedule').innerHTML = '<option value="">Primero selecciona un curso</option>';
     APP.currentPhoto = null;
 }
 
-// ─── ESCÁNER QR ──────────────────────────────────────────────
+// ─── NOTIFICACIÓN EMERGENTE DE ESCANEO ───────────────────────
+let notifTimer = null;
+
+function mostrarNotifEscaneo(tipo, student, record, yaRegistrado) {
+    const notif = document.getElementById('scanNotification');
+    const icon  = document.getElementById('scanNotifIcon');
+    const name  = document.getElementById('scanNotifName');
+    const detail = document.getElementById('scanNotifDetail');
+    const course = document.getElementById('scanNotifCourse');
+    const extra  = document.getElementById('scanNotifExtra');
+
+    // Limpiar timer anterior
+    if (notifTimer) clearTimeout(notifTimer);
+
+    if (tipo === 'ok') {
+        const esEntrada = record.type === CONFIG.TIPOS.ENTRADA;
+        icon.textContent   = esEntrada ? '✅' : '🔴';
+        name.textContent   = student.name;
+        detail.textContent = `${esEntrada ? '🟢 ENTRADA' : '🔴 SALIDA'} · ${record.time}`;
+        course.textContent = `${student.course}`;
+        if (extra) extra.textContent = student.schedule || '';
+        notif.className = 'scan-notification visible notif-ok';
+
+    } else if (tipo === 'ya') {
+        icon.textContent   = '⚠️';
+        name.textContent   = student.name;
+        detail.textContent = `Ya registró ${yaRegistrado.type.toLowerCase()} a las ${yaRegistrado.time}`;
+        course.textContent = student.course;
+        if (extra) extra.textContent = '';
+        notif.className = 'scan-notification visible notif-warn';
+
+    } else {
+        icon.textContent   = '❌';
+        name.textContent   = 'Código no encontrado';
+        detail.textContent = 'Este QR no está registrado en el sistema';
+        course.textContent = '';
+        if (extra) extra.textContent = '';
+        notif.className = 'scan-notification visible notif-bad';
+    }
+
+    notifTimer = setTimeout(closeScanNotif, 5000);
+}
+
+function closeScanNotif() {
+    if (notifTimer) clearTimeout(notifTimer);
+    const notif = document.getElementById('scanNotification');
+    notif.classList.add('notif-hiding');
+    setTimeout(() => { notif.className = 'scan-notification'; }, 350);
+}
+
+// ─── ESCANEO QR — PROCESAMIENTO ──────────────────────────────
+let scanPaused = false;
+
 async function onScanSuccess(decodedText) {
-    if (APP.qrScanner.isPaused) return;
-    APP.qrScanner.pause(true);
+    if (scanPaused) return;
+    scanPaused = true;
+
     try {
-        const data    = JSON.parse(decodedText);
+        let data;
+        try { data = JSON.parse(decodedText); } catch(e) { data = { id: decodedText }; }
+
         const student = APP.db.students.find(s => s.id === data.id);
 
         if (!student) {
+            mostrarNotifEscaneo('bad', null, null, null);
             showScanFeedback('bad', '❌ No registrado', 'Este QR no existe en el sistema.');
-            showScanNotification('bad', 'Código no encontrado', 'QR no registrado en el sistema', '');
-        } else {
-            const mode  = document.querySelector('input[name="scanMode"]:checked').value;
-            const today = getToday();
-            const already = APP.db.attendance.find(a => a.sid === student.id && a.date === today && a.type === mode);
-
-            if (already) {
-                showScanFeedback('warn', `⚠️ ${student.name}`, `Ya registró ${mode.toLowerCase()} hoy a las ${already.time}`);
-                showScanNotification('warn', student.name, `Ya registró ${mode.toLowerCase()} hoy · ${already.time}`, `${student.course} · ${student.schedule}`);
-            } else {
-                const record = {
-                    sid: student.id, name: student.name, dni: student.dni,
-                    course: student.course, schedule: student.schedule,
-                    date: today, time: getTime(), type: mode,
-                    registeredBy: APP.currentUser ? APP.currentUser.email : 'local'
-                };
-                APP.db.attendance.push(record);
-                saveLocal();
-
-                if (APP.authed) {
-                    await sheetsAppend(CONFIG.SHEETS.ASISTENCIA, [[
-                        record.sid, record.name, record.dni, record.course,
-                        record.schedule, record.date, record.time, record.type, record.registeredBy
-                    ]]);
-                }
-
-                const modeLabel = mode === 'ENTRADA' ? '🟢 Entrada' : '🔴 Salida';
-                showScanFeedback('ok', `✅ ${student.name}`, `${modeLabel} · ${record.time}`);
-                showScanNotification('ok', student.name, `${modeLabel} registrada · ${record.time}`, `${student.course}`);
-                refreshAll();
-                renderTodayLog();
-            }
+            setTimeout(() => { scanPaused = false; }, CONFIG.SCANNER.PAUSE_MS);
+            return;
         }
+
+        const mode  = document.querySelector('input[name="scanMode"]:checked')?.value || 'ENTRADA';
+        const today = getToday();
+        const hora  = getTime();
+
+        const yaReg = APP.db.attendance.find(
+            a => a.sid === student.id && a.date === today && a.type === mode
+        );
+
+        if (yaReg) {
+            mostrarNotifEscaneo('ya', student, null, yaReg);
+            showScanFeedback('warn', `⚠️ ${student.name}`, `Ya registró ${mode.toLowerCase()} hoy a las ${yaReg.time}`);
+            setTimeout(() => { scanPaused = false; }, CONFIG.SCANNER.PAUSE_MS);
+            return;
+        }
+
+        // ✅ Registrar asistencia
+        const record = {
+            sid:          student.id,
+            name:         student.name,
+            dni:          student.dni,
+            course:       student.course,
+            schedule:     student.schedule,
+            date:         today,
+            time:         hora,
+            type:         mode,
+            registeredBy: APP.currentUser?.email || 'local'
+        };
+
+        APP.db.attendance.push(record);
+        saveLocal();
+
+        // Mostrar notificación grande INMEDIATAMENTE
+        mostrarNotifEscaneo('ok', student, record, null);
+        showScanFeedback('ok', `✅ ${student.name}`, `${mode === 'ENTRADA' ? '🟢 Entrada' : '🔴 Salida'} · ${hora}`);
+
+        // Actualizar estadísticas
+        renderAttendanceStats();
+        renderTodayLog();
+
+        // Sincronizar con Sheets en background (sin bloquear)
+        if (APP.authed) {
+            sheetsAppend(CONFIG.SHEETS.ASISTENCIA, [[
+                record.sid, record.name, record.dni, record.course,
+                record.schedule, record.date, record.time, record.type, record.registeredBy
+            ]]).catch(e => {
+                console.warn('Error sincronizando asistencia:', e);
+                showToast('warn', 'Sin sincronía', 'Registrado local, se sincronizará después.');
+            });
+        }
+
     } catch(e) {
-        showScanFeedback('bad', '❌ QR inválido', 'El código no es válido para este sistema.');
-        showScanNotification('bad', 'QR inválido', 'El código no pertenece a este sistema', '');
+        console.error('Error en onScanSuccess:', e);
+        showScanFeedback('bad', '❌ Error', 'No se pudo procesar el código QR.');
     }
-    setTimeout(() => { APP.qrScanner.resume(); }, CONFIG.SCANNER.PAUSE_MS);
+
+    setTimeout(() => { scanPaused = false; }, CONFIG.SCANNER.PAUSE_MS);
 }
 
 function showScanFeedback(type, title, msg) {
-    document.getElementById('scanFeedback').innerHTML =
-        `<div class="scan-feedback ${type}"><h4>${title}</h4><p>${msg}</p></div>`;
+    const el = document.getElementById('scanFeedback');
+    if (el) el.innerHTML = `<div class="scan-feedback ${type}"><h4>${title}</h4><p>${msg}</p></div>`;
 }
-function showScanNotification(type, studentName, detail, course) {
-    const notif = document.getElementById('scanNotification');
-    document.getElementById('scanNotifIcon').textContent   = type === 'ok' ? '✅' : type === 'warn' ? '⚠️' : '❌';
-    document.getElementById('scanNotifName').textContent   = studentName;
-    document.getElementById('scanNotifDetail').textContent = detail;
-    document.getElementById('scanNotifCourse').textContent = course || '';
-    notif.className = `scan-notification visible notif-${type}`;
-    clearTimeout(notif._t);
-    notif._t = setTimeout(closeScanNotif, 4500);
+
+// ─── ESCÁNER — cámara directa ─────────────────────────────────
+let html5QrCode = null;
+
+async function startScanner() {
+    const readerEl = document.getElementById('reader');
+    if (!readerEl) return;
+    readerEl.innerHTML = '';
+    scanPaused = false;
+
+    readerEl.innerHTML = `
+        <div id="scannerPreview" style="width:100%;background:#111;border-radius:12px;overflow:hidden;min-height:280px;display:flex;align-items:center;justify-content:center;position:relative;">
+            <p id="scannerMsg" style="color:rgba(255,255,255,.65);font-size:15px;text-align:center;padding:24px;line-height:1.6;">
+                📷 Presiona <b>Iniciar Cámara</b> para comenzar a escanear
+            </p>
+        </div>
+        <div style="padding:12px 0 0;display:flex;flex-direction:column;gap:10px;">
+            <button id="btnStartCam" onclick="initCamera()" class="btn btn-blue btn-block">
+                📷 &nbsp;Iniciar Cámara
+            </button>
+            <button id="btnStopCam" onclick="stopScanner()" class="btn btn-block" style="background:var(--redS);color:var(--red);display:none;">
+                ⏹ &nbsp;Detener Cámara
+            </button>
+            <label class="btn btn-ghost btn-block" style="cursor:pointer;">
+                🖼️ &nbsp;Escanear desde Imagen
+                <input type="file" accept="image/*" style="display:none" onchange="scanFromFile(this)">
+            </label>
+        </div>
+    `;
 }
-function closeScanNotif() {
-    const notif = document.getElementById('scanNotification');
-    notif.classList.remove('visible');
-    notif.classList.add('notif-hiding');
-    setTimeout(() => { notif.className = 'scan-notification'; }, 350);
+
+async function initCamera() {
+    const btnStart  = document.getElementById('btnStartCam');
+    const btnStop   = document.getElementById('btnStopCam');
+    const preview   = document.getElementById('scannerPreview');
+    const msg       = document.getElementById('scannerMsg');
+
+    if (btnStart) { btnStart.textContent = '⏳  Iniciando cámara...'; btnStart.disabled = true; }
+
+    // Detener escáner previo
+    if (html5QrCode) {
+        try { await html5QrCode.stop(); await html5QrCode.clear(); } catch(e) {}
+        html5QrCode = null;
+    }
+
+    try {
+        const cameras = await Html5Qrcode.getCameras();
+        if (!cameras || cameras.length === 0) {
+            showCamError('No se encontró ninguna cámara. Verifica que el dispositivo tenga cámara.');
+            if (btnStart) { btnStart.textContent = '📷  Iniciar Cámara'; btnStart.disabled = false; }
+            return;
+        }
+
+        // Preferir cámara trasera
+        const cam = cameras.find(c => /back|rear|environment|trasera/i.test(c.label))
+                 || cameras[cameras.length - 1];
+
+        // Crear elemento para el video
+        if (msg) msg.remove();
+
+        html5QrCode = new Html5Qrcode('scannerPreview');
+
+        const w = preview ? Math.min(preview.offsetWidth - 40, 260) : 220;
+
+        await html5QrCode.start(
+            cam.id,
+            {
+                fps: 12,
+                qrbox: { width: w, height: w },
+                aspectRatio: 1.333,
+                experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+            },
+            (decoded) => onScanSuccess(decoded),
+            () => {}  // silencioso en el frame scanning
+        );
+
+        if (btnStart) btnStart.style.display = 'none';
+        if (btnStop)  btnStop.style.display  = 'flex';
+
+    } catch(err) {
+        console.error('initCamera error:', err);
+        const msg2 = (err?.message || err?.toString() || '').toLowerCase();
+        let texto = 'No se pudo acceder a la cámara.';
+        if (msg2.includes('permission') || msg2.includes('denied') || msg2.includes('notallowed')) {
+            texto = '🔒 Permiso de cámara denegado.\n\nVe a Ajustes del navegador → Permisos del sitio → Cámara → Permitir.\nLuego recarga la página.';
+        } else if (msg2.includes('notfound') || msg2.includes('devicenotfound')) {
+            texto = 'No se encontró cámara disponible en este dispositivo.';
+        }
+        showCamError(texto);
+        if (btnStart) { btnStart.textContent = '📷  Intentar de nuevo'; btnStart.disabled = false; }
+    }
+}
+
+function showCamError(msg) {
+    const el = document.getElementById('scanFeedback');
+    if (el) el.innerHTML = `<div class="scan-feedback bad" style="margin-top:10px;white-space:pre-line;"><h4>⚠️ Error de cámara</h4><p>${msg}</p></div>`;
+}
+
+async function stopScanner() {
+    if (html5QrCode) {
+        try { await html5QrCode.stop(); } catch(e) {}
+        try { await html5QrCode.clear(); } catch(e) {}
+        html5QrCode = null;
+    }
+    const readerEl = document.getElementById('reader');
+    if (readerEl) {
+        // Volver al estado inicial sin destruir el contenedor
+        startScanner();
+    }
+    const btnStart = document.getElementById('btnStartCam');
+    const btnStop  = document.getElementById('btnStopCam');
+    if (btnStart) btnStop.style.display = 'none';
+    if (btnStop)  btnStart.style.display = 'flex';
+}
+
+async function scanFromFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    showScanFeedback('info', '🔍 Analizando imagen...', 'Buscando código QR...');
+
+    const tmpId = 'qr_tmp_' + Date.now();
+    const tmp = document.createElement('div');
+    tmp.id = tmpId;
+    tmp.style.cssText = 'position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;';
+    document.body.appendChild(tmp);
+
+    const qr = new Html5Qrcode(tmpId);
+    try {
+        const result = await qr.scanFile(file, true);
+        await onScanSuccess(result);
+    } catch(e) {
+        showScanFeedback('bad', '❌ QR no encontrado', 'No se detectó ningún código QR válido en la imagen.');
+    } finally {
+        try { await qr.clear(); } catch(e) {}
+        if (tmp.parentNode) document.body.removeChild(tmp);
+        input.value = '';
+    }
 }
 
 // ─── GESTIÓN DE PERMISOS ─────────────────────────────────────
@@ -672,55 +809,46 @@ async function addPermiso(event) {
     const rol    = document.getElementById('permRol').value;
 
     if (APP.db.permisos.find(p => p.email === email)) {
-        showToast('warn', 'Ya existe', `${email} ya tiene permisos registrados.`);
-        return;
+        showToast('warn','Ya existe',`${email} ya tiene permisos.`); return;
     }
-
     APP.db.permisos.push({ email, nombre, rol });
     saveLocal();
-
     try {
         await sheetsAppend(CONFIG.SHEETS.PERMISOS, [[email, nombre, rol]]);
-        showToast('ok', 'Permiso agregado', `${email} — ${rol}`);
-    } catch(e) {
-        showToast('warn', 'Solo guardado local', 'No se pudo sincronizar con Sheets.');
-    }
-
+        showToast('ok','Permiso agregado',`${email} — ${rol}`);
+    } catch(e) { showToast('warn','Solo local','No se sincronizó con Sheets.'); }
     document.getElementById('permForm').reset();
     renderPermisos();
 }
 
 async function deletePermiso(email) {
     APP.db.permisos = APP.db.permisos.filter(p => p.email !== email);
-    saveLocal();
-    renderPermisos();
-    showToast('ok', 'Permiso eliminado', email);
+    saveLocal(); renderPermisos();
+    showToast('ok','Eliminado', email);
     try {
         await sheetsClear(CONFIG.RANGES.PERMISOS);
         if (APP.db.permisos.length) {
             await sheetsUpdate('Permisos!A2', APP.db.permisos.map(p => [p.email, p.nombre, p.rol]));
         }
-    } catch(e) { console.warn('Error sincronizando eliminación de permiso:', e); }
+    } catch(e) { console.warn('deletePermiso sync error:', e); }
 }
 
 function renderPermisos() {
     const tbody = document.getElementById('permisosBody');
     if (!tbody) return;
     if (!APP.db.permisos.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No hay permisos registrados</td></tr>';
-        return;
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No hay permisos registrados</td></tr>'; return;
     }
     tbody.innerHTML = APP.db.permisos.map(p => `
         <tr>
             <td>${p.email}</td>
-            <td>${p.nombre || '—'}</td>
+            <td>${p.nombre||'—'}</td>
             <td><span class="role-tag role-${p.rol}">${p.rol}</span></td>
             <td><button class="btn btn-red btn-xs" onclick="deletePermiso('${p.email}')">🗑 Eliminar</button></td>
-        </tr>
-    `).join('');
+        </tr>`).join('');
 }
 
-// ─── RENDER ──────────────────────────────────────────────────
+// ─── RENDER GENERAL ──────────────────────────────────────────
 function refreshAll() {
     renderRecentRegistrations();
     renderStudentsTable();
@@ -732,47 +860,43 @@ function refreshAll() {
 }
 
 function renderRecentRegistrations() {
-    const list = [...APP.db.students].reverse().slice(0, 5);
-    const container = document.getElementById('recentList');
-    if (!container) return;
-    if (!list.length) { container.innerHTML = '<p class="empty-msg">No hay registros todavía</p>'; return; }
-    container.innerHTML = list.map(s => `
+    const list = [...APP.db.students].reverse().slice(0,5);
+    const c = document.getElementById('recentList');
+    if (!c) return;
+    if (!list.length) { c.innerHTML='<p class="empty-msg">No hay registros todavía</p>'; return; }
+    c.innerHTML = list.map(s => `
         <div class="list-row">
             <div class="cell-name">
                 <div class="avatar" style="background:${getAvatarColor(s.name)}">${getInitials(s.name)}</div>
-                <div><b>${s.name}</b><br><small style="color:var(--txt3)">${s.course}</small></div>
+                <div><b>${s.name}</b><br><small style="color:var(--txt3)">${s.course||''}</small></div>
             </div>
             <div style="display:flex;gap:6px;align-items:center">
-                ${s.registeredBy ? `<small class="reg-by">por ${s.registeredBy.split('@')[0]}</small>` : ''}
+                ${s.registeredBy?`<small class="reg-by">${s.registeredBy.split('@')[0]}</small>`:''}
                 <button class="btn btn-blue btn-sm" onclick="openQRModal('${s.id}')">📱 QR</button>
             </div>
-        </div>
-    `).join('');
+        </div>`).join('');
 }
 
 function renderStudentsTable() {
-    const query  = (document.getElementById('searchBox')?.value || '').toLowerCase();
-    const today  = getToday();
-    const filtered = APP.db.students.filter(s =>
-        s.name.toLowerCase().includes(query) ||
-        s.dni.includes(query) ||
-        (s.course||'').toLowerCase().includes(query)
+    const q = (document.getElementById('searchBox')?.value||'').toLowerCase();
+    const today = getToday();
+    const list = APP.db.students.filter(s =>
+        s.name.toLowerCase().includes(q) || s.dni.includes(q) || (s.course||'').toLowerCase().includes(q)
     );
     const tbody = document.getElementById('studentsBody');
     if (!tbody) return;
-    if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">No se encontraron estudiantes</td></tr>'; return; }
-    tbody.innerHTML = filtered.map(s => {
-        const hasEntry = APP.db.attendance.find(a => a.sid === s.id && a.date === today && a.type === CONFIG.TIPOS.ENTRADA);
-        const color    = getAvatarColor(s.name);
+    if (!list.length) { tbody.innerHTML='<tr><td colspan="6" class="empty-msg">Sin estudiantes</td></tr>'; return; }
+    tbody.innerHTML = list.map(s => {
+        const ok = APP.db.attendance.find(a => a.sid===s.id && a.date===today && a.type===CONFIG.TIPOS.ENTRADA);
         return `<tr>
             <td><div class="cell-name">
-                <div class="avatar" style="background:${color}">${getInitials(s.name)}</div>
+                <div class="avatar" style="background:${getAvatarColor(s.name)}">${getInitials(s.name)}</div>
                 <div><b>${s.name}</b><br><small style="color:var(--txt3)">${s.email||''}</small></div>
             </div></td>
             <td>${s.dni}</td>
             <td><span class="course-badge">${s.course||'—'}</span></td>
             <td><small class="schedule-chip">${s.schedule||'—'}</small></td>
-            <td><span class="tag ${hasEntry?'tag-ok':'tag-no'}">${hasEntry?'Presente':'Ausente'}</span></td>
+            <td><span class="tag ${ok?'tag-ok':'tag-no'}">${ok?'Presente':'Ausente'}</span></td>
             <td><button class="btn btn-blue btn-sm" onclick="openQRModal('${s.id}')">📱</button></td>
         </tr>`;
     }).join('');
@@ -780,17 +904,20 @@ function renderStudentsTable() {
 
 function renderTodayLog() {
     const today = getToday();
-    const log   = APP.db.attendance.filter(a => a.date === today).reverse();
+    const log   = APP.db.attendance.filter(a => a.date===today).reverse();
     ['todayLog','todayLog2'].forEach(id => {
         const c = document.getElementById(id);
         if (!c) return;
-        if (!log.length) { c.innerHTML = '<p class="empty-msg">Esperando lecturas de QR...</p>'; return; }
+        if (!log.length) { c.innerHTML='<p class="empty-msg">Esperando lecturas de QR...</p>'; return; }
         c.innerHTML = log.map(a => {
-            const isEntry = a.type === CONFIG.TIPOS.ENTRADA;
+            const ent = a.type===CONFIG.TIPOS.ENTRADA;
             return `<div class="list-row">
-                <div><b>${a.name}</b><br><small style="color:var(--txt2)">${a.course}</small></div>
-                <div style="display:flex;align-items:center;gap:6px">
-                    <span class="tag ${isEntry?'tag-ok':'tag-warn'}">${isEntry?'🟢 Entrada':'🔴 Salida'}</span>
+                <div class="cell-name">
+                    <div class="avatar" style="background:${getAvatarColor(a.name)}">${getInitials(a.name)}</div>
+                    <div><b>${a.name}</b><br><small style="color:var(--txt2)">${a.course||''}</small></div>
+                </div>
+                <div style="display:flex;align-items:center;gap:7px">
+                    <span class="tag ${ent?'tag-ok':'tag-warn'}">${ent?'🟢 Entrada':'🔴 Salida'}</span>
                     <span class="list-time">${a.time}</span>
                 </div>
             </div>`;
@@ -801,45 +928,29 @@ function renderTodayLog() {
 function renderAttendanceStats() {
     const today   = getToday();
     const total   = APP.db.students.length;
-    const present = new Set(APP.db.attendance.filter(a => a.date === today && a.type === CONFIG.TIPOS.ENTRADA).map(a => a.sid)).size;
-    const exits   = APP.db.attendance.filter(a => a.date === today && a.type === CONFIG.TIPOS.SALIDA).length;
-    const statTotal   = document.getElementById('statTotal');
-    const statPresent = document.getElementById('statPresent');
-    const statAbsent  = document.getElementById('statAbsent');
-    const statExits   = document.getElementById('statExits');
-    if (statTotal)   statTotal.textContent   = total;
-    if (statPresent) statPresent.textContent = present;
-    if (statAbsent)  statAbsent.textContent  = Math.max(0, total - present);
-    if (statExits)   statExits.textContent   = exits;
+    const present = new Set(APP.db.attendance.filter(a=>a.date===today&&a.type===CONFIG.TIPOS.ENTRADA).map(a=>a.sid)).size;
+    const exits   = APP.db.attendance.filter(a=>a.date===today&&a.type===CONFIG.TIPOS.SALIDA).length;
+    const set = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+    set('statTotal',total); set('statPresent',present);
+    set('statAbsent',Math.max(0,total-present)); set('statExits',exits);
 }
 
 // ─── REPORTES ────────────────────────────────────────────────
 function populateCourseFilters() {
-    let courseNames = APP.db.courses.filter(c => c.active !== false).map(c => c.name);
-    if (!courseNames.length) courseNames = [...new Set(APP.db.students.map(s => s.course))].filter(Boolean);
-    courseNames = [...new Set(courseNames)].sort();
+    let names = APP.db.courses.filter(c=>c.active!==false).map(c=>c.name);
+    if (!names.length) names = [...new Set(APP.db.students.map(s=>s.course))].filter(Boolean);
+    names = [...new Set(names)].sort();
 
-    const inputCourse = document.getElementById('inputCourse');
-    if (inputCourse) {
-        const cur = inputCourse.value;
-        inputCourse.innerHTML = '<option value="">Seleccionar curso...</option>' +
-            courseNames.map(n => `<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('');
-    }
+    const fill = (id, prefix, opts) => {
+        const el = document.getElementById(id); if (!el) return;
+        const cur = el.value;
+        el.innerHTML = `<option value="">${prefix}</option>` + opts.map(n=>`<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('');
+    };
+    fill('inputCourse', 'Seleccionar curso...', names);
+    fill('reportGrade', 'Todos los cursos', names);
 
-    const rg = document.getElementById('reportGrade');
-    if (rg) {
-        const cur = rg.value;
-        rg.innerHTML = '<option value="">Todos los cursos</option>' +
-            courseNames.map(n => `<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('');
-    }
-
-    const rs = document.getElementById('reportSchedule');
-    if (rs) {
-        const schedules = [...new Set(APP.db.students.map(s => s.schedule))].filter(Boolean).sort();
-        const cur = rs.value;
-        rs.innerHTML = '<option value="">Todos los horarios</option>' +
-            schedules.map(s => `<option value="${s}" ${s===cur?'selected':''}>${s}</option>`).join('');
-    }
+    const scheds = [...new Set(APP.db.students.map(s=>s.schedule))].filter(Boolean).sort();
+    fill('reportSchedule', 'Todos los horarios', scheds);
 }
 
 function renderReports() {
@@ -849,70 +960,52 @@ function renderReports() {
     const course   = document.getElementById('reportGrade')?.value    || '';
     const schedule = document.getElementById('reportSchedule')?.value || '';
 
-    let filtered = APP.db.attendance.filter(a => a.date >= dateFrom && a.date <= dateTo);
-    if (course)   filtered = filtered.filter(a => a.course   === course);
-    if (schedule) filtered = filtered.filter(a => a.schedule === schedule);
+    let att = APP.db.attendance.filter(a => a.date>=dateFrom && a.date<=dateTo);
+    if (course)   att = att.filter(a => a.course===course);
+    if (schedule) att = att.filter(a => a.schedule===schedule);
 
-    let students = [...APP.db.students];
-    if (course)   students = students.filter(s => s.course   === course);
-    if (schedule) students = students.filter(s => s.schedule === schedule);
+    let sts = [...APP.db.students];
+    if (course)   sts = sts.filter(s => s.course===course);
+    if (schedule) sts = sts.filter(s => s.schedule===schedule);
 
-    const entries    = filtered.filter(a => a.type === CONFIG.TIPOS.ENTRADA);
-    const exits      = filtered.filter(a => a.type === CONFIG.TIPOS.SALIDA);
-    const presentIds = new Set(entries.map(a => a.sid));
-    const absent     = students.filter(s => !presentIds.has(s.id));
+    const entries = att.filter(a => a.type===CONFIG.TIPOS.ENTRADA);
+    const exits   = att.filter(a => a.type===CONFIG.TIPOS.SALIDA);
+    const pids    = new Set(entries.map(a=>a.sid));
+    const absent  = sts.filter(s => !pids.has(s.id));
 
-    const rTotal   = document.getElementById('reportTotal');
-    const rPresent = document.getElementById('reportPresent');
-    const rAbsent  = document.getElementById('reportAbsent');
-    const rExits   = document.getElementById('reportExits');
-    if (rTotal)   rTotal.textContent   = students.length;
-    if (rPresent) rPresent.textContent = entries.length;
-    if (rAbsent)  rAbsent.textContent  = absent.length;
-    if (rExits)   rExits.textContent   = exits.length;
+    const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+    set('reportTotal',sts.length); set('reportPresent',entries.length);
+    set('reportAbsent',absent.length); set('reportExits',exits.length);
 
     const body = document.getElementById('reportBody');
     if (!body) return;
     if (!entries.length && !absent.length) {
-        body.innerHTML = '<tr><td colspan="6" class="empty-msg">Sin datos para este filtro</td></tr>'; return;
+        body.innerHTML='<tr><td colspan="6" class="empty-msg">Sin datos</td></tr>'; return;
     }
     let rows = '';
     entries.forEach(a => {
-        rows += `<tr>
-            <td><b>${a.name}</b></td>
-            <td><span class="course-badge">${a.course}</span></td>
-            <td>${a.date}</td>
-            <td><span class="tag tag-ok">Presente</span></td>
-            <td>${a.time}</td>
-            <td>${exits.find(x=>x.sid===a.sid&&x.date===a.date)?.time||'—'}</td>
-        </tr>`;
+        const sal = exits.find(x=>x.sid===a.sid&&x.date===a.date)?.time||'—';
+        rows += `<tr><td><b>${a.name}</b></td><td><span class="course-badge">${a.course}</span></td><td>${a.date}</td><td><span class="tag tag-ok">Presente</span></td><td>${a.time}</td><td>${sal}</td></tr>`;
     });
     absent.forEach(s => {
-        rows += `<tr>
-            <td><b>${s.name}</b></td>
-            <td><span class="course-badge">${s.course}</span></td>
-            <td>${dateFrom===dateTo ? dateFrom : `${dateFrom}–${dateTo}`}</td>
-            <td><span class="tag tag-no">Ausente</span></td>
-            <td>—</td><td>—</td>
-        </tr>`;
+        rows += `<tr><td><b>${s.name}</b></td><td><span class="course-badge">${s.course}</span></td><td>${dateFrom===dateTo?dateFrom:`${dateFrom}–${dateTo}`}</td><td><span class="tag tag-no">Ausente</span></td><td>—</td><td>—</td></tr>`;
     });
     body.innerHTML = rows;
     renderScheduleForDay(today);
 }
 
 function renderScheduleForDay(dateStr) {
-    const container = document.getElementById('scheduleToday');
-    if (!container) return;
+    const c = document.getElementById('scheduleToday');
+    if (!c) return;
     const days  = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
-    const dow   = days[new Date(dateStr + 'T12:00:00').getDay()];
-    const sched = APP.db.schedules.filter(s => s.day.toLowerCase() === dow);
-    if (!sched.length) { container.innerHTML = '<p class="empty-msg">No hay horarios para este día</p>'; return; }
-    container.innerHTML = sched.map(s => `
+    const dow   = days[new Date(dateStr+'T12:00:00').getDay()];
+    const sched = APP.db.schedules.filter(s => s.day.toLowerCase()===dow);
+    if (!sched.length) { c.innerHTML='<p class="empty-msg">No hay horarios para hoy</p>'; return; }
+    c.innerHTML = sched.map(s=>`
         <div class="list-row">
-            <div><b>${s.courseName}</b><br><small style="color:var(--txt2)">${s.room ? 'Aula: ' + s.room : ''}</small></div>
+            <div><b>${s.courseName}</b><br><small style="color:var(--txt2)">${s.room?'Aula: '+s.room:''}</small></div>
             <span class="list-time">${s.startTime} – ${s.endTime}</span>
-        </div>
-    `).join('');
+        </div>`).join('');
 }
 
 function downloadReport() {
@@ -923,84 +1016,68 @@ function downloadReport() {
     const course   = document.getElementById('reportGrade')?.value    || '';
     const schedule = document.getElementById('reportSchedule')?.value || '';
 
-    let filtered = APP.db.attendance.filter(a => a.date >= dateFrom && a.date <= dateTo);
-    if (course)   filtered = filtered.filter(a => a.course   === course);
-    if (schedule) filtered = filtered.filter(a => a.schedule === schedule);
+    let att = APP.db.attendance.filter(a=>a.date>=dateFrom&&a.date<=dateTo);
+    if (course)   att = att.filter(a=>a.course===course);
+    if (schedule) att = att.filter(a=>a.schedule===schedule);
 
-    let students = [...APP.db.students];
-    if (course)   students = students.filter(s => s.course   === course);
-    if (schedule) students = students.filter(s => s.schedule === schedule);
+    let sts = [...APP.db.students];
+    if (course)   sts = sts.filter(s=>s.course===course);
+    if (schedule) sts = sts.filter(s=>s.schedule===schedule);
 
-    const entries    = filtered.filter(a => a.type === CONFIG.TIPOS.ENTRADA);
-    const exits      = filtered.filter(a => a.type === CONFIG.TIPOS.SALIDA);
-    const presentIds = new Set(entries.map(a => a.sid));
-    const absent     = students.filter(s => !presentIds.has(s.id));
+    const entries = att.filter(a=>a.type===CONFIG.TIPOS.ENTRADA);
+    const exits   = att.filter(a=>a.type===CONFIG.TIPOS.SALIDA);
+    const pids    = new Set(entries.map(a=>a.sid));
+    const absent  = sts.filter(s=>!pids.has(s.id));
 
-    const doc   = new jsPDF('p','mm','a4');
+    const doc  = new jsPDF('p','mm','a4');
     const pageW = doc.internal.pageSize.getWidth();
-
     doc.setFillColor(27,46,74); doc.rect(0,0,pageW,28,'F');
     doc.setTextColor(255,255,255); doc.setFontSize(18);
-    doc.text('INSTITUTO CEAN', pageW/2, 13, { align: 'center' });
-    doc.setFontSize(10);
-    doc.text('REPORTE DE ASISTENCIA', pageW/2, 22, { align: 'center' });
-
-    doc.setTextColor(0,0,0);
-    let y = 38;
-    doc.setFontSize(10);
+    doc.text('INSTITUTO CEAN', pageW/2,13,{align:'center'});
+    doc.setFontSize(10); doc.text('REPORTE DE ASISTENCIA',pageW/2,22,{align:'center'});
+    doc.setTextColor(0,0,0); let y=38; doc.setFontSize(10);
     const periodo = dateFrom===dateTo ? dateFrom : `${dateFrom} al ${dateTo}`;
-    doc.text(`Período: ${periodo}`, 14, y);
-    if (course)   doc.text(`Curso: ${course}`, 14, y+6);
-    if (schedule) doc.text(`Horario: ${schedule}`, 14, y+12);
+    doc.text(`Período: ${periodo}`,14,y);
+    if (course)   doc.text(`Curso: ${course}`,14,y+6);
+    if (schedule) doc.text(`Horario: ${schedule}`,14,y+12);
     y += (course||schedule) ? 22 : 10;
-
     doc.setFont(undefined,'bold');
-    doc.text(`Total: ${students.length}  |  Presentes: ${entries.length}  |  Ausentes: ${absent.length}`, 14, y);
-    doc.setFont(undefined,'normal');
-    y += 10;
-
+    doc.text(`Total: ${sts.length}  |  Presentes: ${entries.length}  |  Ausentes: ${absent.length}`,14,y);
+    doc.setFont(undefined,'normal'); y+=10;
     doc.setFillColor(27,46,74); doc.rect(14,y,pageW-28,7,'F');
     doc.setTextColor(255,255,255); doc.setFontSize(8); doc.setFont(undefined,'bold');
-    doc.text('ESTUDIANTE',16,y+5); doc.text('CURSO',70,y+5);
-    doc.text('FECHA',108,y+5); doc.text('ESTADO',130,y+5);
-    doc.text('ENTRADA',150,y+5); doc.text('SALIDA',172,y+5);
-    doc.setFont(undefined,'normal'); doc.setTextColor(0,0,0);
-    y += 10;
-
-    const addRow = (name,course,date,status,entry,exit,even) => {
-        if (y > 278) { doc.addPage(); y = 20; }
-        if (even) { doc.setFillColor(248,246,242); doc.rect(14,y-4,pageW-28,7,'F'); }
+    ['ESTUDIANTE','CURSO','FECHA','ESTADO','ENTRADA','SALIDA'].forEach((h,i)=>{
+        doc.text(h,[16,70,108,130,150,172][i],y+5);
+    });
+    doc.setFont(undefined,'normal'); doc.setTextColor(0,0,0); y+=10;
+    const addRow=(name,course,date,status,entry,exit,even)=>{
+        if(y>278){doc.addPage();y=20;}
+        if(even){doc.setFillColor(248,246,242);doc.rect(14,y-4,pageW-28,7,'F');}
         doc.setFontSize(8);
         doc.text(name.substring(0,28),16,y);
-        doc.text((course||'').substring(0,22),70,y);
-        doc.text(date,108,y);
-        doc.text(status,130,y);
-        doc.text(entry,150,y);
-        doc.text(exit,172,y);
-        y += 7;
+        doc.text((course||'').substring(0,18),70,y);
+        doc.text(date,108,y); doc.text(status,130,y);
+        doc.text(entry,150,y); doc.text(exit,172,y);
+        y+=7;
     };
-    entries.forEach((a,i) => addRow(a.name, a.course, a.date, 'PRESENTE', a.time, exits.find(x=>x.sid===a.sid&&x.date===a.date)?.time||'—', i%2===0));
-    absent.forEach((s,i) => addRow(s.name, s.course, '—', 'AUSENTE', '—', '—', (entries.length+i)%2===0));
-
-    y += 8;
-    doc.setFontSize(7); doc.setTextColor(150);
-    doc.text(`Generado: ${new Date().toLocaleString('es-BO')} | Instituto CEAN`, 14, y);
-
-    const fn = `Reporte_CEAN_${dateFrom}_${dateTo}${course ? '_'+course.substring(0,20) : ''}.pdf`;
-    doc.save(fn);
-    showToast('ok', 'Reporte generado', fn);
+    entries.forEach((a,i)=>addRow(a.name,a.course,a.date,'PRESENTE',a.time,exits.find(x=>x.sid===a.sid&&x.date===a.date)?.time||'—',i%2===0));
+    absent.forEach((s,i)=>addRow(s.name,s.course,'—','AUSENTE','—','—',(entries.length+i)%2===0));
+    y+=8; doc.setFontSize(7); doc.setTextColor(150);
+    doc.text(`Generado: ${new Date().toLocaleString('es-BO')} | Instituto CEAN`,14,y);
+    doc.save(`Reporte_CEAN_${dateFrom}_${dateTo}.pdf`);
+    showToast('ok','Reporte generado','PDF descargado');
 }
 
 // ─── MODAL QR ────────────────────────────────────────────────
 function openQRModal(studentId) {
-    const student = APP.db.students.find(s => s.id === studentId);
-    if (!student) return;
-    APP.lastStudent = { ...student, photo: student.photo || (student.photoUrl?.startsWith('data:') ? student.photoUrl : null) };
-    document.getElementById('modalName').textContent = student.name;
-    document.getElementById('modalInfo').textContent = `${student.course} · CI: ${student.dni}`;
+    const s = APP.db.students.find(s=>s.id===studentId);
+    if (!s) return;
+    APP.lastStudent = { ...s, photo: s.photo || (s.photoUrl?.startsWith('data:') ? s.photoUrl : null) };
+    document.getElementById('modalName').textContent = s.name;
+    document.getElementById('modalInfo').textContent = `${s.course} · CI: ${s.dni}`;
     const qrWrap = document.getElementById('modalQR');
     qrWrap.innerHTML = '';
-    new QRCode(qrWrap, { text: JSON.stringify({ id: student.id }), width: 160, height: 160 });
+    new QRCode(qrWrap, { text: JSON.stringify({ id: s.id }), width: 160, height: 160 });
     document.getElementById('overlay').classList.add('open');
 }
 function closeModal() { document.getElementById('overlay').classList.remove('open'); }
@@ -1016,153 +1093,124 @@ function roundRect(ctx, x, y, w, h, r) {
 function drawAvatarPlaceholder(ctx, student, x, y, w, h) {
     const g = ctx.createLinearGradient(x,y,x+w,y+h);
     g.addColorStop(0,'#2d4a73'); g.addColorStop(1,'#1b2e4a');
-    ctx.fillStyle = g; ctx.fillRect(x,y,w,h);
-    const initials = student.name.split(' ').map(p=>p[0]).join('').substring(0,2).toUpperCase();
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = 'bold 72px Georgia,serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(initials, x+w/2, y+h/2);
-    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle=g; ctx.fillRect(x,y,w,h);
+    const ini = student.name.split(' ').map(p=>p[0]).join('').substring(0,2).toUpperCase();
+    ctx.fillStyle='rgba(255,255,255,.5)'; ctx.font='bold 72px Georgia,serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(ini, x+w/2, y+h/2); ctx.textBaseline='alphabetic';
 }
 
 async function buildCredentialCanvas(student, qrSourceCanvas, photoDataUrl) {
-    const W = 1020, H = 640;
+    const W=1020, H=640;
     const c = document.createElement('canvas');
-    c.width = W; c.height = H;
+    c.width=W; c.height=H;
     const ctx = c.getContext('2d');
-
-    const navy = '#0f1e33', navyM = '#1a2e4a', gold = '#d4a843', goldL = '#f0c860', white = '#ffffff';
+    const navy='#0f1e33', gold='#d4a843', goldL='#f0c860', white='#ffffff';
 
     const bgG = ctx.createLinearGradient(0,0,W,H);
-    bgG.addColorStop(0,'#0d1b2a'); bgG.addColorStop(0.5,'#1a2e4a'); bgG.addColorStop(1,'#142338');
-    ctx.fillStyle = bgG; ctx.fillRect(0,0,W,H);
+    bgG.addColorStop(0,'#0d1b2a'); bgG.addColorStop(.5,'#1a2e4a'); bgG.addColorStop(1,'#142338');
+    ctx.fillStyle=bgG; ctx.fillRect(0,0,W,H);
 
-    ctx.save(); ctx.globalAlpha = 0.04;
-    for (let px = 20; px < W; px += 40)
-        for (let py = 20; py < H; py += 40) {
-            ctx.beginPath(); ctx.arc(px,py,1.5,0,Math.PI*2);
-            ctx.fillStyle = white; ctx.fill();
-        }
+    ctx.save(); ctx.globalAlpha=.04;
+    for(let px=20;px<W;px+=40) for(let py=20;py<H;py+=40){
+        ctx.beginPath(); ctx.arc(px,py,1.5,0,Math.PI*2); ctx.fillStyle=white; ctx.fill();
+    }
     ctx.restore();
 
-    const stripeGrad = ctx.createLinearGradient(0,0,0,H);
-    stripeGrad.addColorStop(0,gold); stripeGrad.addColorStop(0.5,'#b8922e'); stripeGrad.addColorStop(1,gold);
-    ctx.fillStyle = stripeGrad; ctx.fillRect(0,0,8,H);
-    ctx.fillStyle = 'rgba(212,168,67,0.15)'; ctx.fillRect(8,0,4,H);
+    const sg=ctx.createLinearGradient(0,0,0,H);
+    sg.addColorStop(0,gold); sg.addColorStop(.5,'#b8922e'); sg.addColorStop(1,gold);
+    ctx.fillStyle=sg; ctx.fillRect(0,0,8,H);
+    ctx.fillStyle='rgba(212,168,67,.15)'; ctx.fillRect(8,0,4,H);
 
-    const hG = ctx.createLinearGradient(0,0,W,0);
-    hG.addColorStop(0,navy); hG.addColorStop(0.6,'#1a2e4a'); hG.addColorStop(1,'#243f63');
-    ctx.fillStyle = hG; ctx.fillRect(0,0,W,72);
-    ctx.fillStyle = gold; ctx.fillRect(0,72,W,3);
+    const hG=ctx.createLinearGradient(0,0,W,0);
+    hG.addColorStop(0,navy); hG.addColorStop(.6,'#1a2e4a'); hG.addColorStop(1,'#243f63');
+    ctx.fillStyle=hG; ctx.fillRect(0,0,W,72);
+    ctx.fillStyle=gold; ctx.fillRect(0,72,W,3);
 
-    ctx.font = 'bold 13px Arial,sans-serif'; ctx.fillStyle = goldL;
-    ctx.textAlign = 'center'; ctx.letterSpacing = '4px';
-    ctx.fillText('INSTITUTO', W/2, 30); ctx.letterSpacing = '0px';
-    ctx.font = 'bold 28px Crimson Pro,Georgia,serif'; ctx.fillStyle = white;
-    ctx.fillText('CEAN', W/2, 58);
-    ctx.font = '10px Arial,sans-serif'; ctx.fillStyle = 'rgba(212,168,67,0.7)';
-    ctx.letterSpacing = '2px'; ctx.fillText('SISTEMA DE ASISTENCIA', W/2, 70);
-    ctx.letterSpacing = '0px';
+    ctx.font='bold 13px Arial,sans-serif'; ctx.fillStyle=goldL;
+    ctx.textAlign='center'; ctx.letterSpacing='4px';
+    ctx.fillText('INSTITUTO',W/2,30); ctx.letterSpacing='0px';
+    ctx.font='bold 28px Crimson Pro,Georgia,serif'; ctx.fillStyle=white; ctx.fillText('CEAN',W/2,58);
+    ctx.font='10px Arial,sans-serif'; ctx.fillStyle='rgba(212,168,67,.7)';
+    ctx.letterSpacing='2px'; ctx.fillText('SISTEMA DE ASISTENCIA',W/2,70); ctx.letterSpacing='0px';
 
-    const photoX = 20, photoY = 90, photoW = 220, photoH = 270;
-    if (photoDataUrl) {
-        await new Promise(resolve => {
-            const img = new Image();
-            img.onload = () => { ctx.drawImage(img, photoX, photoY, photoW, photoH); resolve(); };
-            img.onerror = () => { drawAvatarPlaceholder(ctx, student, photoX, photoY, photoW, photoH); resolve(); };
-            img.src = photoDataUrl;
+    const [px2,py2,pw,ph]=[20,90,220,270];
+    if(photoDataUrl) {
+        await new Promise(res=>{
+            const img=new Image(); img.crossOrigin='anonymous';
+            img.onload=()=>{ ctx.drawImage(img,px2,py2,pw,ph); res(); };
+            img.onerror=()=>{ drawAvatarPlaceholder(ctx,student,px2,py2,pw,ph); res(); };
+            img.src=photoDataUrl;
         });
-    } else {
-        drawAvatarPlaceholder(ctx, student, photoX, photoY, photoW, photoH);
-    }
-    ctx.strokeStyle = gold; ctx.lineWidth = 2;
-    ctx.strokeRect(photoX, photoY, photoW, photoH);
+    } else drawAvatarPlaceholder(ctx,student,px2,py2,pw,ph);
+    ctx.strokeStyle=gold; ctx.lineWidth=2; ctx.strokeRect(px2,py2,pw,ph);
 
-    if (qrSourceCanvas) {
-        const qrSize = 200, qrX = 20, qrY = 390;
-        ctx.fillStyle = white; ctx.fillRect(qrX-8, qrY-8, qrSize+16, qrSize+16);
-        ctx.drawImage(qrSourceCanvas, qrX, qrY, qrSize, qrSize);
-        ctx.strokeStyle = gold; ctx.lineWidth = 2;
-        ctx.strokeRect(qrX-8, qrY-8, qrSize+16, qrSize+16);
+    if(qrSourceCanvas){
+        const qs=200, qx=20, qy=390;
+        ctx.fillStyle=white; ctx.fillRect(qx-8,qy-8,qs+16,qs+16);
+        ctx.drawImage(qrSourceCanvas,qx,qy,qs,qs);
+        ctx.strokeStyle=gold; ctx.lineWidth=2; ctx.strokeRect(qx-8,qy-8,qs+16,qs+16);
     }
 
-    const dataX = 260, dataY = 82, dataW = W - dataX - 20;
-    const drawField = (label, value, x, y, maxW) => {
-        ctx.font = 'bold 9px Arial,sans-serif'; ctx.fillStyle = goldL;
-        ctx.textAlign = 'left'; ctx.letterSpacing = '2px';
-        ctx.fillText(label.toUpperCase(), x+10, y);
-        ctx.letterSpacing = '0px';
-        ctx.fillStyle = 'rgba(212,168,67,0.25)'; ctx.fillRect(x+10, y+4, maxW-20, 1);
-        let fs = 19; ctx.font = `bold ${fs}px Georgia,serif`;
-        ctx.fillStyle = white;
-        while (ctx.measureText(value).width > maxW-20 && fs > 12) {
-            fs--; ctx.font = `bold ${fs}px Georgia,serif`;
-        }
-        ctx.fillText(value, x+10, y+24);
+    const dx=260, dy=82, dw=W-dx-20;
+    const field=(label,value,x,y,maxW)=>{
+        ctx.font='bold 9px Arial,sans-serif'; ctx.fillStyle=goldL; ctx.textAlign='left';
+        ctx.letterSpacing='2px'; ctx.fillText(label.toUpperCase(),x+10,y); ctx.letterSpacing='0px';
+        ctx.fillStyle='rgba(212,168,67,.25)'; ctx.fillRect(x+10,y+4,maxW-20,1);
+        let fs=19; ctx.font=`bold ${fs}px Georgia,serif`; ctx.fillStyle=white;
+        while(ctx.measureText(value).width>maxW-20&&fs>12){fs--;ctx.font=`bold ${fs}px Georgia,serif`;}
+        ctx.fillText(value,x+10,y+24);
     };
 
-    ctx.font = 'bold 9px Arial,sans-serif'; ctx.fillStyle = goldL;
-    ctx.textAlign = 'left'; ctx.letterSpacing = '2px';
-    ctx.fillText('NOMBRE COMPLETO', dataX+10, dataY+16);
-    ctx.letterSpacing = '0px';
-    ctx.fillStyle = 'rgba(212,168,67,0.25)'; ctx.fillRect(dataX+10, dataY+20, dataW-20, 1);
+    ctx.font='bold 9px Arial,sans-serif'; ctx.fillStyle=goldL; ctx.textAlign='left';
+    ctx.letterSpacing='2px'; ctx.fillText('NOMBRE COMPLETO',dx+10,dy+16); ctx.letterSpacing='0px';
+    ctx.fillStyle='rgba(212,168,67,.25)'; ctx.fillRect(dx+10,dy+20,dw-20,1);
 
-    let nfs = 22; ctx.font = `bold ${nfs}px Georgia,serif`;
-    const fullName = student.name.toUpperCase();
-    while (ctx.measureText(fullName).width > dataW-20 && nfs > 13) { nfs--; ctx.font = `bold ${nfs}px Georgia,serif`; }
-    if (ctx.measureText(fullName).width > dataW-20) {
-        const words = fullName.split(' '), half = Math.ceil(words.length/2);
-        nfs = 18; ctx.font = `bold ${nfs}px Georgia,serif`;
-        ctx.fillStyle = white; ctx.textAlign = 'left';
-        ctx.fillText(words.slice(0,half).join(' '), dataX+10, dataY+46);
-        ctx.fillText(words.slice(half).join(' '),   dataX+10, dataY+68);
-    } else {
-        ctx.fillStyle = white; ctx.textAlign = 'left';
-        ctx.fillText(fullName, dataX+10, dataY+52);
-    }
+    let nfs=22; ctx.font=`bold ${nfs}px Georgia,serif`;
+    const fn2=student.name.toUpperCase();
+    while(ctx.measureText(fn2).width>dw-20&&nfs>13){nfs--;ctx.font=`bold ${nfs}px Georgia,serif`;}
+    if(ctx.measureText(fn2).width>dw-20){
+        const ws=fn2.split(' '), h2=Math.ceil(ws.length/2);
+        nfs=18; ctx.font=`bold ${nfs}px Georgia,serif`; ctx.fillStyle=white; ctx.textAlign='left';
+        ctx.fillText(ws.slice(0,h2).join(' '),dx+10,dy+46);
+        ctx.fillText(ws.slice(h2).join(' '),dx+10,dy+68);
+    } else { ctx.fillStyle=white; ctx.textAlign='left'; ctx.fillText(fn2,dx+10,dy+52); }
 
-    const col2X = dataX + dataW/2;
-    drawField('Carnet de Identidad', student.dni,     dataX,  dataY+98,  dataW/2);
-    drawField('Año', new Date().getFullYear()+'',      col2X, dataY+98,  dataW/2);
-    drawField('Curso', student.course||'—',            dataX,  dataY+152, dataW);
-    drawField('Horario', (student.schedule||'—').substring(0,50), dataX, dataY+206, dataW);
+    field('Carnet de Identidad',student.dni,     dx,     dy+98, dw/2);
+    field('Año',new Date().getFullYear()+'',     dx+dw/2,dy+98, dw/2);
+    field('Curso',student.course||'—',           dx,     dy+152,dw);
+    field('Horario',(student.schedule||'—').substring(0,50), dx, dy+206, dw);
 
-    const footY = H - 58;
-    const fG = ctx.createLinearGradient(0,footY,W,footY);
-    fG.addColorStop(0,'#0a1828'); fG.addColorStop(0.5,'#132030'); fG.addColorStop(1,'#0a1828');
-    ctx.fillStyle = fG; ctx.fillRect(0,footY,W,H-footY);
-    ctx.fillStyle = gold; ctx.fillRect(0,footY,W,3);
-
-    ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '9px Arial,sans-serif';
-    ctx.fillText(`ID: ${student.id}`, 22, footY+22);
-    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(212,168,67,0.75)'; ctx.font = 'bold 10px Arial,sans-serif';
-    ctx.letterSpacing = '1px'; ctx.fillText('DOCUMENTO DE USO EXCLUSIVO — INSTITUTO CEAN', W/2, footY+22);
-    ctx.letterSpacing = '0px';
-    ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '9px Arial,sans-serif';
-    ctx.fillText(`Emitido: ${new Date().toLocaleDateString('es-BO')}`, W-22, footY+22);
-    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.font = '9px Arial,sans-serif';
-    ctx.fillText('Válido para el control de ingreso y egreso del establecimiento', W/2, footY+42);
-
+    const fy=H-58;
+    const fG=ctx.createLinearGradient(0,fy,W,fy);
+    fG.addColorStop(0,'#0a1828'); fG.addColorStop(.5,'#132030'); fG.addColorStop(1,'#0a1828');
+    ctx.fillStyle=fG; ctx.fillRect(0,fy,W,H-fy);
+    ctx.fillStyle=gold; ctx.fillRect(0,fy,W,3);
+    ctx.textAlign='left'; ctx.fillStyle='rgba(255,255,255,.35)'; ctx.font='9px Arial,sans-serif';
+    ctx.fillText(`ID: ${student.id}`,22,fy+22);
+    ctx.textAlign='center'; ctx.fillStyle='rgba(212,168,67,.75)'; ctx.font='bold 10px Arial,sans-serif';
+    ctx.letterSpacing='1px'; ctx.fillText('DOCUMENTO DE USO EXCLUSIVO — INSTITUTO CEAN',W/2,fy+22); ctx.letterSpacing='0px';
+    ctx.textAlign='right'; ctx.fillStyle='rgba(255,255,255,.35)'; ctx.font='9px Arial,sans-serif';
+    ctx.fillText(`Emitido: ${new Date().toLocaleDateString('es-BO')}`,W-22,fy+22);
+    ctx.textAlign='center'; ctx.fillStyle='rgba(255,255,255,.25)'; ctx.font='9px Arial,sans-serif';
+    ctx.fillText('Válido para el control de ingreso y egreso del establecimiento',W/2,fy+42);
     return c;
 }
 
 function buildQRCanvas(studentId) {
     return new Promise(resolve => {
         const tmp = document.createElement('div');
-        tmp.style.cssText = 'position:absolute;left:-9999px';
+        tmp.style.cssText = 'position:absolute;left:-9999px;';
         document.body.appendChild(tmp);
-        new QRCode(tmp, { text: JSON.stringify({ id: studentId }), width: 220, height: 220, correctLevel: QRCode.CorrectLevel.H });
+        new QRCode(tmp, { text: JSON.stringify({id:studentId}), width:220, height:220, correctLevel:QRCode.CorrectLevel.H });
         setTimeout(() => {
             const qrc = tmp.querySelector('canvas');
-            const out = document.createElement('canvas');
-            const pad = 18;
-            out.width  = (qrc ? qrc.width  : 220) + pad*2;
-            out.height = (qrc ? qrc.height : 220) + pad*2;
-            const ctx = out.getContext('2d');
-            ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,out.width,out.height);
-            if (qrc) ctx.drawImage(qrc, pad, pad);
-            document.body.removeChild(tmp);
-            resolve(out);
+            const out = document.createElement('canvas'); const pad=18;
+            out.width=(qrc?qrc.width:220)+pad*2; out.height=(qrc?qrc.height:220)+pad*2;
+            const ctx=out.getContext('2d');
+            ctx.fillStyle='#fff'; ctx.fillRect(0,0,out.width,out.height);
+            if(qrc) ctx.drawImage(qrc,pad,pad);
+            document.body.removeChild(tmp); resolve(out);
         }, 600);
     });
 }
@@ -1170,203 +1218,73 @@ function buildQRCanvas(studentId) {
 async function downloadQRPng() {
     const canvas = document.querySelector('#qrcode canvas');
     if (!canvas || !APP.lastStudent) return;
-    const out = document.createElement('canvas');
-    const pad = 20;
-    out.width = canvas.width+pad*2; out.height = canvas.height+pad*2;
-    const ctx = out.getContext('2d');
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,out.width,out.height);
-    ctx.drawImage(canvas, pad, pad);
-    const link = document.createElement('a');
-    link.download = `QR_${APP.lastStudent.dni}.png`; link.href = out.toDataURL(); link.click();
+    const out=document.createElement('canvas'); const pad=20;
+    out.width=canvas.width+pad*2; out.height=canvas.height+pad*2;
+    const ctx=out.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,out.width,out.height);
+    ctx.drawImage(canvas,pad,pad);
+    const a=document.createElement('a');
+    a.download=`QR_${APP.lastStudent.dni}.png`; a.href=out.toDataURL(); a.click();
 }
 
 async function downloadPDF() {
     if (!APP.lastStudent) return;
-    showToast('info', 'Generando carnet...', 'Por favor espera');
-    const { jsPDF }   = window.jspdf;
-    const qrCanvas    = await buildQRCanvas(APP.lastStudent.id);
-    const photoUrl    = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
-    const credCanvas  = await buildCredentialCanvas(APP.lastStudent, qrCanvas, photoUrl);
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [100, 63] });
-    doc.addImage(credCanvas.toDataURL('image/jpeg', 0.97), 'JPEG', 0, 0, 100, 63);
+    showToast('info','Generando carnet...','Por favor espera');
+    const {jsPDF} = window.jspdf;
+    const qrC = await buildQRCanvas(APP.lastStudent.id);
+    const ph  = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
+    const cC  = await buildCredentialCanvas(APP.lastStudent, qrC, ph);
+    const doc = new jsPDF({orientation:'landscape',unit:'mm',format:[100,63]});
+    doc.addImage(cC.toDataURL('image/jpeg',.97),'JPEG',0,0,100,63);
     doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
-    showToast('ok', 'Carnet generado', APP.lastStudent.name);
+    showToast('ok','Carnet generado',APP.lastStudent.name);
 }
 
 async function downloadPDFFromModal() {
     if (!APP.lastStudent) return;
-    showToast('info', 'Generando carnet...', 'Por favor espera');
-    const { jsPDF }   = window.jspdf;
-    const qrCanvas    = await buildQRCanvas(APP.lastStudent.id);
-    const photoUrl    = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
-    const credCanvas  = await buildCredentialCanvas(APP.lastStudent, qrCanvas, photoUrl);
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [100, 63] });
-    doc.addImage(credCanvas.toDataURL('image/jpeg', 0.97), 'JPEG', 0, 0, 100, 63);
+    showToast('info','Generando carnet...','Por favor espera');
+    const {jsPDF} = window.jspdf;
+    const qrC = await buildQRCanvas(APP.lastStudent.id);
+    const ph  = APP.lastStudent.photo || APP.lastStudent.photoUrl || null;
+    const cC  = await buildCredentialCanvas(APP.lastStudent, qrC, ph);
+    const doc = new jsPDF({orientation:'landscape',unit:'mm',format:[100,63]});
+    doc.addImage(cC.toDataURL('image/jpeg',.97),'JPEG',0,0,100,63);
     doc.save(`Carnet_${APP.lastStudent.dni}.pdf`);
-    showToast('ok', 'Carnet generado', APP.lastStudent.name);
+    showToast('ok','Carnet generado',APP.lastStudent.name);
 }
 
 // ─── NAVEGACIÓN ──────────────────────────────────────────────
 function initNavigation() {
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
             btn.classList.add('active');
-            document.getElementById('panel-' + btn.dataset.panel).classList.add('active');
+            document.getElementById('panel-'+btn.dataset.panel).classList.add('active');
 
-            if (btn.dataset.panel !== 'scanner') {
-                stopScanner();
-            } else {
-                startScanner();
-            }
+            if (btn.dataset.panel !== 'scanner') stopScanner();
+            else startScanner();
+
             if (btn.dataset.panel === 'reports')  renderReports();
             if (btn.dataset.panel === 'permisos') renderPermisos();
         });
     });
 }
 
-// ─── ESCÁNER — Html5Qrcode directo (más confiable en móvil) ──
-let html5QrCode = null;
-
-async function startScanner() {
-    const readerEl = document.getElementById('reader');
-    if (!readerEl) return;
-
-    // Limpiar el contenedor
-    readerEl.innerHTML = '';
-    document.getElementById('scanFeedback').innerHTML = '';
-
-    // Crear la UI del escáner manualmente
-    readerEl.innerHTML = `
-        <div id="scannerBox" style="width:100%;background:#000;border-radius:12px;overflow:hidden;min-height:260px;display:flex;align-items:center;justify-content:center;">
-            <p style="color:rgba(255,255,255,.6);font-size:14px;padding:20px;text-align:center;">Presiona el botón para iniciar la cámara</p>
-        </div>
-        <div style="padding:12px 0 4px;display:flex;flex-direction:column;gap:8px;">
-            <button id="btnStartCam" class="btn btn-blue btn-block" onclick="initCamera()" style="min-height:52px;font-size:16px;">📷 Iniciar Cámara</button>
-            <button id="btnStopCam"  class="btn btn-red  btn-block" onclick="stopScanner()" style="display:none;min-height:50px;font-size:15px;">⏹ Detener Cámara</button>
-            <label class="btn btn-ghost btn-block" style="min-height:50px;font-size:15px;cursor:pointer;">
-                🖼️ Escanear desde Imagen
-                <input type="file" accept="image/*" style="display:none" onchange="scanFromFile(this)">
-            </label>
-        </div>
-    `;
-}
-
-async function initCamera() {
-    const btnStart = document.getElementById('btnStartCam');
-    const btnStop  = document.getElementById('btnStopCam');
-    const box      = document.getElementById('scannerBox');
-    if (!box) return;
-
-    btnStart.textContent = '⏳ Iniciando...';
-    btnStart.disabled = true;
-
-    // Detener escáner previo si existe
-    if (html5QrCode) {
-        try { await html5QrCode.stop(); } catch(e) {}
-        html5QrCode = null;
-    }
-
-    try {
-        // Obtener cámaras disponibles
-        const cameras = await Html5Qrcode.getCameras();
-        if (!cameras || cameras.length === 0) {
-            showScanError('No se encontró ninguna cámara en este dispositivo.');
-            resetScannerBtn();
-            return;
-        }
-
-        // Preferir cámara trasera en móvil
-        const cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length - 1];
-
-        html5QrCode = new Html5Qrcode('scannerBox');
-
-        const config = {
-            fps: 12,
-            qrbox: { width: 240, height: 240 },
-            aspectRatio: 1.0,
-            experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-        };
-
-        await html5QrCode.start(
-            cam.id,
-            config,
-            (decodedText) => { onScanSuccess(decodedText); },
-            () => {} // error silencioso mientras busca
-        );
-
-        // UI activa
-        box.style.minHeight = 'auto';
-        btnStart.style.display = 'none';
-        btnStop.style.display  = 'flex';
-
-    } catch(err) {
-        console.error('Error cámara:', err);
-        const msg = err.toString().includes('Permission')
-            ? 'Permiso de cámara denegado. Ve a Ajustes del navegador y permite el acceso a la cámara.'
-            : 'No se pudo acceder a la cámara. Verifica los permisos del navegador.';
-        showScanError(msg);
-        resetScannerBtn();
-    }
-}
-
-function resetScannerBtn() {
-    const btnStart = document.getElementById('btnStartCam');
-    if (btnStart) { btnStart.textContent = '📷 Iniciar Cámara'; btnStart.disabled = false; }
-}
-
-function showScanError(msg) {
-    document.getElementById('scanFeedback').innerHTML =
-        `<div class="scan-feedback bad" style="margin-top:10px"><h4>⚠️ Error de cámara</h4><p>${msg}</p></div>`;
-}
-
-async function stopScanner() {
-    if (html5QrCode) {
-        try { await html5QrCode.stop(); } catch(e) {}
-        html5QrCode = null;
-    }
-    const readerEl = document.getElementById('reader');
-    if (readerEl) readerEl.innerHTML = '';
-}
-
-async function scanFromFile(input) {
-    const file = input.files[0];
-    if (!file) return;
-
-    const tmpId = 'scannerBox_file_' + Date.now();
-    const tmp   = document.createElement('div');
-    tmp.id = tmpId; tmp.style.display = 'none';
-    document.body.appendChild(tmp);
-
-    const qr = new Html5Qrcode(tmpId);
-    try {
-        const result = await qr.scanFile(file, true);
-        onScanSuccess(result);
-    } catch(e) {
-        document.getElementById('scanFeedback').innerHTML =
-            `<div class="scan-feedback bad"><h4>❌ QR no encontrado</h4><p>No se detectó ningún código QR en la imagen.</p></div>`;
-    } finally {
-        try { await qr.clear(); } catch(e) {}
-        document.body.removeChild(tmp);
-        input.value = '';
-    }
-}
-
 function initScanModeToggle() {
-    document.querySelectorAll('input[name="scanMode"]').forEach(r => r.addEventListener('change', updateScanModeStyles));
+    document.querySelectorAll('input[name="scanMode"]').forEach(r=>r.addEventListener('change', updateScanModeStyles));
     updateScanModeStyles();
 }
 function updateScanModeStyles() {
     const sel = document.querySelector('input[name="scanMode"]:checked')?.value;
-    document.querySelectorAll('.scan-mode-selector label').forEach(l => l.classList.remove('mode-active-entrada','mode-active-salida'));
-    if (sel === 'ENTRADA') document.querySelector('.mode-entrada')?.classList.add('mode-active-entrada');
+    document.querySelectorAll('.scan-mode-selector label').forEach(l=>l.classList.remove('mode-active-entrada','mode-active-salida'));
+    if (sel==='ENTRADA') document.querySelector('.mode-entrada')?.classList.add('mode-active-entrada');
     else document.querySelector('.mode-salida')?.classList.add('mode-active-salida');
 }
 
 // ─── INIT ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-    loadLocal(); // cargar cache sin permisos
+    loadLocal();
     initNavigation();
     initScanModeToggle();
     const today = getToday();
@@ -1374,6 +1292,5 @@ document.addEventListener('DOMContentLoaded', () => {
     const dt = document.getElementById('reportDateTo');
     if (df) df.value = today;
     if (dt) dt.value = today;
-    // La pantalla de login empieza en modo "cargando" hasta que Google cargue
     showLoginLoading('Cargando Google...');
 });
