@@ -325,6 +325,7 @@ function configurarUI(perm) {
 }
 
 function handleSignout() {
+    stopScanner();
     const token = gapi.client.getToken();
     if (token) {
         google.accounts.oauth2.revoke(token.access_token);
@@ -1214,19 +1215,142 @@ function initNavigation() {
             btn.classList.add('active');
             document.getElementById('panel-' + btn.dataset.panel).classList.add('active');
 
-            if (btn.dataset.panel !== 'scanner' && APP.qrScanner) {
-                if (scanObserver) scanObserver.disconnect();
-                APP.qrScanner.clear(); APP.qrScanner = null;
+            if (btn.dataset.panel !== 'scanner') {
+                stopScanner();
+            } else {
+                startScanner();
             }
-            if (btn.dataset.panel === 'scanner') {
-                APP.qrScanner = new Html5QrcodeScanner('reader', { fps: CONFIG.SCANNER.FPS, qrbox: CONFIG.SCANNER.QR_BOX });
-                APP.qrScanner.render(onScanSuccess);
-                setTimeout(watchScannerTranslations, 400);
-            }
-            if (btn.dataset.panel === 'reports') renderReports();
+            if (btn.dataset.panel === 'reports')  renderReports();
             if (btn.dataset.panel === 'permisos') renderPermisos();
         });
     });
+}
+
+// ─── ESCÁNER — Html5Qrcode directo (más confiable en móvil) ──
+let html5QrCode = null;
+
+async function startScanner() {
+    const readerEl = document.getElementById('reader');
+    if (!readerEl) return;
+
+    // Limpiar el contenedor
+    readerEl.innerHTML = '';
+    document.getElementById('scanFeedback').innerHTML = '';
+
+    // Crear la UI del escáner manualmente
+    readerEl.innerHTML = `
+        <div id="scannerBox" style="width:100%;background:#000;border-radius:12px;overflow:hidden;min-height:260px;display:flex;align-items:center;justify-content:center;">
+            <p style="color:rgba(255,255,255,.6);font-size:14px;padding:20px;text-align:center;">Presiona el botón para iniciar la cámara</p>
+        </div>
+        <div style="padding:12px 0 4px;display:flex;flex-direction:column;gap:8px;">
+            <button id="btnStartCam" class="btn btn-blue btn-block" onclick="initCamera()" style="min-height:52px;font-size:16px;">📷 Iniciar Cámara</button>
+            <button id="btnStopCam"  class="btn btn-red  btn-block" onclick="stopScanner()" style="display:none;min-height:50px;font-size:15px;">⏹ Detener Cámara</button>
+            <label class="btn btn-ghost btn-block" style="min-height:50px;font-size:15px;cursor:pointer;">
+                🖼️ Escanear desde Imagen
+                <input type="file" accept="image/*" style="display:none" onchange="scanFromFile(this)">
+            </label>
+        </div>
+    `;
+}
+
+async function initCamera() {
+    const btnStart = document.getElementById('btnStartCam');
+    const btnStop  = document.getElementById('btnStopCam');
+    const box      = document.getElementById('scannerBox');
+    if (!box) return;
+
+    btnStart.textContent = '⏳ Iniciando...';
+    btnStart.disabled = true;
+
+    // Detener escáner previo si existe
+    if (html5QrCode) {
+        try { await html5QrCode.stop(); } catch(e) {}
+        html5QrCode = null;
+    }
+
+    try {
+        // Obtener cámaras disponibles
+        const cameras = await Html5Qrcode.getCameras();
+        if (!cameras || cameras.length === 0) {
+            showScanError('No se encontró ninguna cámara en este dispositivo.');
+            resetScannerBtn();
+            return;
+        }
+
+        // Preferir cámara trasera en móvil
+        const cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length - 1];
+
+        html5QrCode = new Html5Qrcode('scannerBox');
+
+        const config = {
+            fps: 12,
+            qrbox: { width: 240, height: 240 },
+            aspectRatio: 1.0,
+            experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+        };
+
+        await html5QrCode.start(
+            cam.id,
+            config,
+            (decodedText) => { onScanSuccess(decodedText); },
+            () => {} // error silencioso mientras busca
+        );
+
+        // UI activa
+        box.style.minHeight = 'auto';
+        btnStart.style.display = 'none';
+        btnStop.style.display  = 'flex';
+
+    } catch(err) {
+        console.error('Error cámara:', err);
+        const msg = err.toString().includes('Permission')
+            ? 'Permiso de cámara denegado. Ve a Ajustes del navegador y permite el acceso a la cámara.'
+            : 'No se pudo acceder a la cámara. Verifica los permisos del navegador.';
+        showScanError(msg);
+        resetScannerBtn();
+    }
+}
+
+function resetScannerBtn() {
+    const btnStart = document.getElementById('btnStartCam');
+    if (btnStart) { btnStart.textContent = '📷 Iniciar Cámara'; btnStart.disabled = false; }
+}
+
+function showScanError(msg) {
+    document.getElementById('scanFeedback').innerHTML =
+        `<div class="scan-feedback bad" style="margin-top:10px"><h4>⚠️ Error de cámara</h4><p>${msg}</p></div>`;
+}
+
+async function stopScanner() {
+    if (html5QrCode) {
+        try { await html5QrCode.stop(); } catch(e) {}
+        html5QrCode = null;
+    }
+    const readerEl = document.getElementById('reader');
+    if (readerEl) readerEl.innerHTML = '';
+}
+
+async function scanFromFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const tmpId = 'scannerBox_file_' + Date.now();
+    const tmp   = document.createElement('div');
+    tmp.id = tmpId; tmp.style.display = 'none';
+    document.body.appendChild(tmp);
+
+    const qr = new Html5Qrcode(tmpId);
+    try {
+        const result = await qr.scanFile(file, true);
+        onScanSuccess(result);
+    } catch(e) {
+        document.getElementById('scanFeedback').innerHTML =
+            `<div class="scan-feedback bad"><h4>❌ QR no encontrado</h4><p>No se detectó ningún código QR en la imagen.</p></div>`;
+    } finally {
+        try { await qr.clear(); } catch(e) {}
+        document.body.removeChild(tmp);
+        input.value = '';
+    }
 }
 
 function initScanModeToggle() {
