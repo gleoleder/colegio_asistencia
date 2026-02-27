@@ -11,7 +11,7 @@
     <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoad()"></script>
     <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root{--cream:#fdf8f0;--white:#fff;--sand:#f0e9dc;--sand2:#e5dace;--navy:#1b2e4a;--navyL:#2d4a73;--blue:#3b6cb4;--blueS:#e8f0fb;--blueG:#d0e2f7;--green:#2a8f6a;--greenS:#dff5ec;--red:#c9463d;--redS:#fce8e6;--amber:#c68a1d;--amberS:#fdf3dc;--plum:#6b4c8a;--plumS:#f0e8f7;--txt:#2c2c2c;--txt2:#5a6472;--txt3:#8c95a3;--brd:#e4ddd3;--r:14px;--rs:10px}
+        :root{--cream:#fdf8f0;--white:#fff;--sand:#f0e9dc;--sand2:#e5dace;--navy:#1b2e4a;--navyL:#2d4a73;--blue:#3b6cb4;--blueS:#e8f0fb;--blueG:#d0e2f7;--green:#2a8f6a;--greenS:#dff5ec;--red:#c9463d;--redS:#fce8e6;--amber:#c68a1d;--amberS:#fdf3dc;--txt:#2c2c2c;--txt2:#5a6472;--txt3:#8c95a3;--brd:#e4ddd3;--r:14px;--rs:10px}
         *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Outfit',sans-serif;background:var(--cream);color:var(--txt);min-height:100vh}
         .header{background:linear-gradient(135deg,var(--navy),var(--navyL) 60%,var(--blue));padding:0 24px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(27,46,74,.25)}
         .logo{display:flex;align-items:center;gap:10px}.logo-ic{width:38px;height:38px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.2);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px}.logo h1{font-family:'Crimson Pro',serif;font-size:18px;color:#fff}.logo small{font-size:9.5px;color:rgba(255,255,255,.5);letter-spacing:1.5px;text-transform:uppercase}
@@ -24,23 +24,17 @@
         .photo-row{display:flex;align-items:center;gap:12px}.photo-c{width:64px;height:64px;border-radius:50%;background:var(--sand);border:2px dashed var(--brd);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0}.photo-c:hover{border-color:var(--blue)}.photo-c img{width:100%;height:100%;object-fit:cover}
         .btn{padding:9px 18px;border:none;border-radius:var(--rs);font-family:'Outfit';font-size:12px;font-weight:700;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:5px}.btn:active{transform:scale(.97)}.btn-blue{background:var(--blue);color:#fff}.btn-blue:hover{background:var(--navyL)}.btn-ghost{background:var(--sand);color:var(--txt2)}.btn-ghost:hover{background:var(--sand2)}.btn-red{background:var(--redS);color:var(--red)}.btn-sm{padding:6px 11px;font-size:11px}
         #qrcode{margin-top:14px;display:flex;justify-content:center;padding:16px;background:var(--sand);border-radius:var(--r);min-height:20px}
-        #qrcode canvas, #qrcode img { display: block; max-width: 100%; }
-        /* Ocultar el img duplicado que genera qrcodejs en algunos navegadores */
-        #qrcode img { display: none !important; }
-        #qrcode canvas { display: block !important; }
-
+        #qrcode canvas{display:block!important;margin:0 auto}#qrcode img{display:none!important}
         .qr-actions{margin-top:10px;display:none;gap:6px;justify-content:center;flex-wrap:wrap}
         table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3);font-weight:700;border-bottom:2px solid var(--brd);background:var(--sand)}td{padding:9px 10px;font-size:13px;border-bottom:1px solid var(--brd)}tr:hover td{background:#faf7f2}
         .cn{display:flex;align-items:center;gap:8px}.av{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10px;color:#fff;overflow:hidden;flex-shrink:0}.av img{width:100%;height:100%;object-fit:cover}.tg{padding:2px 8px;border-radius:16px;font-size:10px;font-weight:700}.tg-ok{background:var(--greenS);color:var(--green)}.tg-no{background:var(--redS);color:var(--red)}
         #reader{width:100%;max-width:460px;margin:0 auto;border-radius:var(--r);overflow:hidden}
-        #reader__dashboard_section_csr button{background:var(--blue)!important;color:#fff!important;border:none!important;border-radius:8px!important;padding:8px 16px!important;font-family:'Outfit'!important;font-weight:700!important;cursor:pointer!important}
-        .scan-fb{padding:14px;border-radius:var(--r);text-align:center;max-width:460px;margin:10px auto 0;animation:fi .25s}.scan-fb.ok{background:var(--greenS);border:1.5px solid var(--green)}.scan-fb.warn{background:var(--amberS);border:1.5px solid var(--amber)}.scan-fb.bad{background:var(--redS);border:1.5px solid var(--red)}.scan-fb h4{font-family:'Crimson Pro',serif;font-size:15px}.scan-fb p{font-size:11.5px;color:var(--txt2)}
-        .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}.st{background:var(--white);border:1px solid var(--brd);border-radius:var(--r);padding:14px;border-left:4px solid}.st.sb{border-left-color:var(--blue)}.st.sg{border-left-color:var(--green)}.st.sr{border-left-color:var(--red)}.st.sa{border-left-color:var(--amber)}.st-l{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--txt3);font-weight:600}.st-v{font-family:'Crimson Pro',serif;font-size:28px;font-weight:700}.st.sb .st-v{color:var(--blue)}.st.sg .st-v{color:var(--green)}.st.sr .st-v{color:var(--red)}.st.sa .st-v{color:var(--amber)}
-        .lr{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--brd)}.lr:last-child{border:0}.ll{display:flex;align-items:center;gap:9px}.lt{font-size:11px;font-weight:600;color:var(--txt2);background:var(--sand);padding:3px 8px;border-radius:5px}
+        .scan-fb{padding:14px;border-radius:var(--r);text-align:center;max-width:460px;margin:10px auto 0;animation:fi .25s}.scan-fb.ok{background:var(--greenS);border:1.5px solid var(--green)}.scan-fb.bad{background:var(--redS);border:1.5px solid var(--red)}.scan-fb.warn{background:var(--amberS);border:1.5px solid var(--amber)}
+        .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}.st{background:var(--white);border:1px solid var(--brd);border-radius:var(--r);padding:14px;border-left:4px solid}.st.sb{border-left-color:var(--blue)}.st.sg{border-left-color:var(--green)}.st-l{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--txt3);font-weight:600}.st-v{font-family:'Crimson Pro',serif;font-size:28px;font-weight:700}.st.sb .st-v{color:var(--blue)}.st.sg .st-v{color:var(--green)}
+        .lr{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--brd)}.lt{font-size:11px;font-weight:600;color:var(--txt2);background:var(--sand);padding:3px 8px;border-radius:5px}
         .overlay{display:none;position:fixed;inset:0;background:rgba(27,46,74,.4);backdrop-filter:blur(4px);z-index:500;align-items:center;justify-content:center}.overlay.open{display:flex}
-        .modal{background:var(--white);border-radius:16px;padding:28px;text-align:center;max-width:400px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.12);animation:mp .2s}
-        .modal .qr-wrap img { display: none !important; } /* Limpiar duplicados en modal */
-        .modal .qr-wrap canvas { display: block !important; margin: 0 auto; }
+        .modal{background:var(--white);border-radius:16px;padding:28px;text-align:center;max-width:400px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+        .modal .qr-wrap img{display:none!important}.modal .qr-wrap canvas{display:block!important;margin:0 auto}
     </style>
 </head>
 <body>
@@ -67,16 +61,16 @@
             <div class="card-title">📋 Registrar Nuevo Estudiante</div>
             <form id="regForm" onsubmit="doRegister(event)">
                 <div class="form-grid">
-                    <div class="field full"><label>Foto</label><div class="photo-row"><div class="photo-c" id="phC" onclick="document.getElementById('phF').click()"><span style="font-size:20px;opacity:.3">📷</span></div><input type="file" id="phF" accept="image/*" style="display:none" onchange="loadPhoto(this)"></div></div>
-                    <div class="field"><label>Nombre *</label><input type="text" id="iN" required></div>
-                    <div class="field"><label>DNI *</label><input type="text" id="iD" required></div>
+                    <div class="field full"><label>Foto</label><div class="photo-row"><div class="photo-c" id="phC" onclick="document.getElementById('phF').click()">📷</div><input type="file" id="phF" accept="image/*" style="display:none" onchange="loadPhoto(this)"></div></div>
+                    <div class="field"><label>Nombre *</label><input type="text" id="iN" required placeholder="Nombre completo"></div>
+                    <div class="field"><label>DNI *</label><input type="text" id="iD" required placeholder="Documento"></div>
                     <div class="field"><label>Grado *</label><select id="iG" required><option value="">...</option><option>1° Primaria</option><option>2° Primaria</option><option>3° Primaria</option><option>4° Primaria</option><option>5° Primaria</option><option>6° Primaria</option></select></div>
                     <div class="field"><label>Sección *</label><select id="iS" required><option value="">...</option><option>A</option><option>B</option><option>C</option></select></div>
                     <div class="field full"><button type="submit" class="btn btn-blue">📱 Registrar y Generar QR</button></div>
                 </div>
             </form>
             <div id="qrcode"></div>
-            <p id="qrStatus" class="status-msg" style="text-align:center; font-size:12px; margin-top:10px"></p>
+            <p id="qrStatus" class="status-msg" style="text-align:center"></p>
             <div class="qr-actions" id="qrActions">
                 <button class="btn btn-blue btn-sm" onclick="dlPDF()">📄 Carnet PDF</button>
                 <button class="btn btn-ghost btn-sm" onclick="dlQRpng()">🖼️ Descargar QR</button>
@@ -89,8 +83,8 @@
         <div class="card">
             <div class="card-title">📷 Escáner de Asistencia</div>
             <div style="display:flex;gap:12px;justify-content:center;margin-bottom:10px">
-                <label><input type="radio" name="scanMode" value="ENTRADA" checked> 🟢 Entrada</label>
-                <label><input type="radio" name="scanMode" value="SALIDA"> 🔴 Salida</label>
+                <label style="cursor:pointer"><input type="radio" name="scanMode" value="ENTRADA" checked> 🟢 Entrada</label>
+                <label style="cursor:pointer"><input type="radio" name="scanMode" value="SALIDA"> 🔴 Salida</label>
             </div>
             <div id="reader"></div>
             <div id="scanFb"></div>
@@ -99,17 +93,17 @@
     </section>
 
     <section id="p-students" class="pnl">
-        <input type="text" id="sBox" placeholder="🔍 Buscar..." oninput="rStudents()" style="width:100%;padding:10px;margin-bottom:12px;border-radius:10px;border:1px solid #ccc;">
-        <div class="card"><div class="card-title">👥 Estudiantes</div><div style="overflow-x:auto"><table><thead><tr><th>Estudiante</th><th>DNI</th><th>Hoy</th><th>Acciones</th></tr></thead><tbody id="tB"></tbody></table></div></div>
+        <input type="text" id="sBox" placeholder="🔍 Buscar alumno..." oninput="rStudents()" style="width:100%;padding:10px;margin-bottom:12px;border-radius:10px;border:1px solid var(--brd)">
+        <div class="card"><div class="card-title">👥 Estudiantes</div><div style="overflow-x:auto"><table><thead><tr><th>Nombre</th><th>DNI</th><th>Estado Hoy</th><th>Acciones</th></tr></thead><tbody id="tB"></tbody></table></div></div>
     </section>
 
     <section id="p-attendance" class="pnl">
-        <div class="stats"><div class="st sb"><div class="st-l">Total</div><div class="st-v" id="xT">0</div></div><div class="st sg"><div class="st-l">Presentes</div><div class="st-v" id="xP">0</div></div></div>
-        <div class="card"><div class="card-title">📊 Historial</div><div id="attH"></div></div>
+        <div class="stats"><div class="st sb"><div class="st-l">Total Alumnos</div><div class="st-v" id="xT">0</div></div><div class="st sg"><div class="st-l">Asistencias Hoy</div><div class="st-v" id="xP">0</div></div></div>
+        <div class="card"><div class="card-title">📊 Historial Reciente</div><div id="attH"></div></div>
     </section>
 </main>
 
-<div class="overlay" id="ovl"><div class="modal"><h3 id="mN"></h3><p class="sub" id="mI"></p><div class="qr-wrap" id="mQR"></div><div class="modal-btns"><button class="btn btn-blue btn-sm" onclick="dlPDFm()">📄 PDF</button><button class="btn btn-red btn-sm" onclick="document.getElementById('ovl').classList.remove('open')">Cerrar</button></div></div></div>
+<div class="overlay" id="ovl"><div class="modal"><h3 id="mN"></h3><p id="mI" style="font-size:12px; color:var(--txt2); margin-bottom:15px"></p><div class="qr-wrap" id="mQR"></div><div class="modal-btns" style="margin-top:15px"><button class="btn btn-blue btn-sm" onclick="dlPDFm()">📄 PDF</button><button class="btn btn-red btn-sm" onclick="document.getElementById('ovl').classList.remove('open')">Cerrar</button></div></div></div>
 
 <script>
 const CLIENT_ID='814005655098-8csk41qts3okv4b2fjnq7ls4qc2kq0vc.apps.googleusercontent.com';
@@ -118,12 +112,13 @@ const SHEET_ID='1m0rv2gcMW3E8Yrh02PnwtHgZ3utj8XRPa9kYpwwm5oo';
 const FOLDER='1ig8n3pthz8esYzmAsoibPUPz1MNVg88m';
 const SCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
 
-let tokenClient, gapiOk=false, gisOk=false, authed=false;
+let tokenClient, gapiOk=false, gisOk=false, authed=false, qrScanner=null;
 let db = {students:[], attendance:[]}, curPh=null, lastSt=null;
 
-function onGapiLoad(){ gapi.load('client', async () => { await gapi.client.init({apiKey: API_KEY, discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4', 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest']}); gapiOk=true; checkAuth(); }); }
-function onGisLoad(){ tokenClient = google.accounts.oauth2.initTokenClient({client_id: CLIENT_ID, scope: SCOPES, callback: ''}); gisOk=true; checkAuth(); }
-function checkAuth(){ if(gapiOk && gisOk){ document.getElementById('authB').style.display='inline-flex'; loadLocal(); } }
+// --- GOOGLE AUTH ---
+function onGapiLoad(){ gapi.load('client', async () => { await gapi.client.init({apiKey: API_KEY, discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4', 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest']}); gapiOk=true; checkReady(); }); }
+function onGisLoad(){ tokenClient = google.accounts.oauth2.initTokenClient({client_id: CLIENT_ID, scope: SCOPES, callback: ''}); gisOk=true; checkReady(); }
+function checkReady(){ if(gapiOk && gisOk){ document.getElementById('authB').style.display='inline-flex'; loadLocal(); } }
 
 function handleAuth(){
     tokenClient.callback = async (r) => { if(r.error) return; authed=true; document.getElementById('authB').style.display='none'; document.getElementById('outB').style.display='inline-flex'; syncStatus('ok','Conectado'); await loadFromSheets(); };
@@ -132,12 +127,13 @@ function handleAuth(){
 
 function handleSignout(){ const t=gapi.client.getToken(); if(t){ google.accounts.oauth2.revoke(t.access_token); gapi.client.setToken(''); } authed=false; document.getElementById('authB').style.display='inline-flex'; document.getElementById('outB').style.display='none'; syncStatus('g','Desconectado'); }
 
+// --- DATA MANAGEMENT ---
 function syncStatus(t,txt){ const e=document.getElementById('syncC'); e.className='chip '+(t==='ok'?'chip-ok':t==='err'?'chip-err':'chip-g'); e.textContent=txt; }
-function saveLocal(){ localStorage.setItem('san_agustin_db', JSON.stringify(db)); }
-function loadLocal(){ const s=localStorage.getItem('san_agustin_db'); if(s){ db=JSON.parse(s); refreshAll(); } }
+function saveLocal(){ localStorage.setItem('san_agustin_v2', JSON.stringify(db)); }
+function loadLocal(){ const s=localStorage.getItem('san_agustin_v2'); if(s){ db=JSON.parse(s); refreshAll(); } }
 
 async function loadFromSheets(){
-    syncStatus('g','Sincronizando...');
+    syncStatus('g','Cargando...');
     try {
         const rs = await gapi.client.sheets.spreadsheets.values.get({spreadsheetId: SHEET_ID, range: 'Estudiantes!A2:H'});
         if(rs.result.values) db.students = rs.result.values.map(r=>({id:r[0], name:r[1], dni:r[2], grade:r[3], section:r[4], photoUrl:r[5], qrUrl:r[6], createdAt:r[7]}));
@@ -148,14 +144,21 @@ async function loadFromSheets(){
 }
 
 async function uploadDrive(name, b64, mime){
-    const base64Data = b64.split(',')[1];
-    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + gapi.client.getToken().access_token, 'Content-Type': 'multipart/related; boundary=foo' },
-        body: `--foo\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({name: name, parents: [FOLDER], mimeType: mime})}\r\n--foo\r\nContent-Type: ${mime}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64Data}\r\n--foo--`
-    });
-    const f = await res.json(); return f.id ? `https://drive.google.com/uc?export=view&id=${f.id}` : '';
+    if(!authed) return '';
+    try {
+        const base64Data = b64.split(',')[1];
+        const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + gapi.client.getToken().access_token, 'Content-Type': 'multipart/related; boundary=foo' },
+            body: `--foo\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({name, parents:[FOLDER], mimeType:mime})}\r\n--foo\r\nContent-Type: ${mime}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64Data}\r\n--foo--`
+        });
+        const f = await res.json(); return f.id ? `https://drive.google.com/uc?export=view&id=${f.id}` : '';
+    } catch(e){ return ''; }
 }
+
+// --- LOGIC ---
+const getToday = () => new Date().toISOString().split('T')[0];
+const getTime = () => new Date().toLocaleTimeString('es-BO', {hour12:false});
 
 function loadPhoto(inp){
     const f=inp.files[0]; if(!f) return;
@@ -164,94 +167,155 @@ function loadPhoto(inp){
             const c=document.createElement('canvas'); c.width=200; c.height=200;
             c.getContext('2d').drawImage(img,0,0,200,200);
             curPh=c.toDataURL('image/jpeg',0.8);
-            document.getElementById('phC').innerHTML=`<img src="${curPh}">`;
+            document.getElementById('phC').innerHTML=`<img src="${curPh}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`;
         }; img.src=e.target.result;
     }; rd.readAsDataURL(f);
 }
 
-// --- REGISTRO CORREGIDO ---
 async function doRegister(e){
     e.preventDefault();
-    const qrDiv = document.getElementById('qrcode');
-    qrDiv.innerHTML = ''; // LIMPIEZA TOTAL
+    const qrDiv = document.getElementById('qrcode'); qrDiv.innerHTML = '';
     
     const st = {
-        id: 'S'+Date.now(), name: document.getElementById('iN').value,
-        dni: document.getElementById('iD').value, grade: document.getElementById('iG').value,
+        id: 'SID'+Date.now(), name: document.getElementById('iN').value.trim(),
+        dni: document.getElementById('iD').value.trim(), grade: document.getElementById('iG').value,
         section: document.getElementById('iS').value, photoUrl: '', qrUrl: '', createdAt: new Date().toISOString()
     };
-    if(db.students.find(x=>x.dni===st.dni)){ alert('DNI duplicado'); return; }
 
+    if(db.students.find(x=>x.dni===st.dni)){ alert('El DNI ya existe en el sistema.'); return; }
+
+    // Generar QR (solo ID para que sea pequeño y rápido)
     new QRCode(qrDiv, { text: JSON.stringify({id:st.id}), width: 180, height: 180, correctLevel: QRCode.CorrectLevel.H });
     document.getElementById('qrActions').style.display='flex';
     lastSt = {...st, photo: curPh};
 
-    await new Promise(r => setTimeout(r, 400)); // Esperar renderizado
+    await new Promise(r => setTimeout(r, 500)); 
 
     if(authed){
-        document.getElementById('qrStatus').textContent = 'Sincronizando...';
+        document.getElementById('qrStatus').textContent = 'Subiendo datos a Google...';
         st.photoUrl = curPh ? await uploadDrive(`Foto_${st.dni}.jpg`, curPh, 'image/jpeg') : '';
         const canv = qrDiv.querySelector('canvas');
         st.qrUrl = await uploadDrive(`QR_${st.dni}.png`, canv.toDataURL(), 'image/png');
         await gapi.client.sheets.spreadsheets.values.append({spreadsheetId: SHEET_ID, range: 'Estudiantes', valueInputOption: 'USER_ENTERED', resource: {values: [[st.id, st.name, st.dni, st.grade, st.section, st.photoUrl, st.qrUrl, st.createdAt]]}});
-        document.getElementById('qrStatus').textContent = '✓ Sincronizado';
+        document.getElementById('qrStatus').textContent = '✓ Registrado y Sincronizado';
+    } else {
+        document.getElementById('qrStatus').textContent = '✓ Registrado localmente (Sin Google)';
     }
 
     db.students.push(st); saveLocal(); refreshAll();
     document.getElementById('regForm').reset(); document.getElementById('phC').innerHTML='📷'; curPh=null;
 }
 
-// --- UI ---
-function refreshAll(){ rRecent(); rStudents(); rAtt(); rTodLog(); }
-function rRecent(){
-    const items = [...db.students].reverse().slice(0,5);
-    document.getElementById('recList').innerHTML = items.map(s=>`<div class="lr"><div><b>${s.name}</b></div><button class="btn btn-blue btn-sm" onclick="openQR('${s.id}')">QR</button></div>`).join('');
+// --- SCANNER LOGIC (CORREGIDO) ---
+async function onScanSuccess(decodedText) {
+    if(qrScanner.isPaused) return;
+    qrScanner.pause(true); // Evita lecturas múltiples
+    
+    try {
+        const data = JSON.parse(decodedText);
+        // BUSCAR ALUMNO EN BASE DE DATOS
+        const st = db.students.find(x => x.id === data.id);
+        
+        if(!st) {
+            showScanFb('bad', 'No Registrado', 'Este alumno no existe en la base de datos.');
+        } else {
+            const mode = document.querySelector('input[name="scanMode"]:checked').value;
+            const today = getToday();
+            
+            // VERIFICAR SI YA MARCÓ
+            const yaMarcado = db.attendance.find(a => a.sid === st.id && a.date === today && a.type === mode);
+            
+            if(yaMarcado) {
+                showScanFb('warn', st.name, `Ya registró su ${mode} hoy a las ${yaMarcado.time}`);
+            } else {
+                // REGISTRAR ASISTENCIA
+                const rec = { sid:st.id, name:st.name, dni:st.dni, grade:st.grade, section:st.section, date:today, time:getTime(), type:mode };
+                db.attendance.push(rec);
+                saveLocal();
+                
+                if(authed) {
+                    await gapi.client.sheets.spreadsheets.values.append({spreadsheetId: SHEET_ID, range: 'Asistencia', valueInputOption: 'USER_ENTERED', resource: {values: [[rec.sid, rec.name, rec.dni, rec.grade, rec.section, rec.date, rec.time, rec.type]]}});
+                }
+                
+                showScanFb('ok', '✓ ' + st.name, `${mode} registrada: ${rec.time}`);
+                refreshAll();
+            }
+        }
+    } catch(e) {
+        showScanFb('bad', 'Error QR', 'El código QR no es válido para este sistema.');
+    }
+    
+    setTimeout(() => { qrScanner.resume(); }, 3000); // Reanudar tras 3 segundos
 }
+
+function showScanFb(type, title, msg){
+    const div = document.getElementById('scanFb');
+    div.innerHTML = `<div class="scan-fb ${type}"><h4>${title}</h4><p>${msg}</p></div>`;
+}
+
+// --- UI RENDERS ---
+function refreshAll(){ rRecent(); rStudents(); rAtt(); rTodLog(); }
+
+function rRecent(){
+    const list = [...db.students].reverse().slice(0,5);
+    document.getElementById('recList').innerHTML = list.map(s=>`<div class="lr"><div><b>${s.name}</b><br><small>${s.grade} ${s.section}</small></div><button class="btn btn-blue btn-sm" onclick="openQR('${s.id}')">QR</button></div>`).join('');
+}
+
 function rStudents(){
     const q = document.getElementById('sBox').value.toLowerCase();
-    document.getElementById('tB').innerHTML = db.students.filter(s=>s.name.toLowerCase().includes(q)).map(s=>`<tr><td>${s.name}</td><td>${s.dni}</td><td>-</td><td><button class="btn btn-blue btn-sm" onclick="openQR('${s.id}')">QR</button></td></tr>`).join('');
+    const today = getToday();
+    const filtered = db.students.filter(s => s.name.toLowerCase().includes(q) || s.dni.includes(q));
+    document.getElementById('tB').innerHTML = filtered.map(s => {
+        const asis = db.attendance.find(a => a.sid === s.id && a.date === today && a.type === 'ENTRADA');
+        return `<tr><td><b>${s.name}</b></td><td>${s.dni}</td><td><span class="tg ${asis?'tg-ok':'tg-no'}">${asis?'P':'A'}</span></td><td><button class="btn btn-blue btn-sm" onclick="openQR('${s.id}')">📱</button></td></tr>`;
+    }).join('');
 }
+
 function rTodLog(){
-    const items = db.attendance.filter(a=>a.date===new Date().toISOString().split('T')[0]).reverse();
-    document.getElementById('todLog').innerHTML = items.map(a=>`<div class="lr"><b>${a.name}</b><span>${a.time}</span></div>`).join('');
+    const today = getToday();
+    const log = db.attendance.filter(a => a.date === today).reverse();
+    document.getElementById('todLog').innerHTML = log.length ? log.map(a => `<div class="lr"><div><b>${a.name}</b><br><small>${a.type}</small></div><div class="lt">${a.time}</div></div>`).join('') : '<p style="text-align:center; padding:20px; color:#888">Esperando lecturas...</p>';
 }
+
 function rAtt(){
     document.getElementById('xT').textContent = db.students.length;
-    document.getElementById('xP').textContent = db.attendance.filter(a=>a.date===new Date().toISOString().split('T')[0]).length;
+    document.getElementById('xP').textContent = db.attendance.filter(a => a.date === getToday() && a.type === 'ENTRADA').length;
 }
 
 function openQR(id){
-    const s = db.students.find(x=>x.id===id); if(!s) return;
+    const s = db.students.find(x => x.id === id); if(!s) return;
     lastSt = s; document.getElementById('mN').textContent = s.name;
+    document.getElementById('mI').textContent = `${s.grade} ${s.section} - DNI: ${s.dni}`;
     const mQR = document.getElementById('mQR'); mQR.innerHTML = '';
     new QRCode(mQR, { text: JSON.stringify({id:s.id}), width: 160, height: 160 });
     document.getElementById('ovl').classList.add('open');
 }
 
-function dlQRpng(){ const canv = document.querySelector("#qrcode canvas"); const a = document.createElement('a'); a.download='QR.png'; a.href=canv.toDataURL(); a.click(); }
+function dlQRpng(){ const canv = document.querySelector("#qrcode canvas"); const a = document.createElement('a'); a.download=`QR_${lastSt.dni}.png`; a.href=canv.toDataURL(); a.click(); }
 function dlPDF(){
     const { jsPDF } = window.jspdf; const doc = new jsPDF('l','mm',[90,60]);
-    doc.text('COLEGIO SAN AGUSTIN', 45, 10, {align:'center'}); doc.text(lastSt.name, 10, 25);
-    const canv = document.querySelector("#qrcode canvas"); doc.addImage(canv.toDataURL(),'PNG',60,20,25,25);
-    doc.save('Carnet.pdf');
+    doc.setFillColor(27,46,74); doc.rect(0,0,90,15,'F');
+    doc.setTextColor(255); doc.setFontSize(12); doc.text('COLEGIO SAN AGUSTIN', 45, 10, {align:'center'});
+    doc.setTextColor(0); doc.setFontSize(10); doc.text(lastSt.name.toUpperCase(), 10, 25);
+    doc.setFontSize(8); doc.text('DNI: '+lastSt.dni, 10, 32);
+    doc.text('GRADO: '+lastSt.grade, 10, 38);
+    const canv = document.querySelector("#qrcode canvas"); doc.addImage(canv.toDataURL(),'PNG',55,18,30,30);
+    doc.save(`Carnet_${lastSt.dni}.pdf`);
 }
 
-// Navegación
-document.querySelectorAll('.nav-b').forEach(b => {
-    b.onclick = () => {
+// --- NAVIGATION ---
+document.querySelectorAll('.nav-b').forEach(btn => {
+    btn.onclick = () => {
         document.querySelectorAll('.nav-b, .pnl').forEach(el=>el.classList.remove('on'));
-        b.classList.add('on'); document.getElementById('p-'+b.dataset.p).classList.add('on');
-        if(b.dataset.p==='scanner') {
-            const sc = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
-            sc.render(async (txt) => {
-                const d = JSON.parse(txt); const st = db.students.find(x=>x.id===d.id);
-                if(st){
-                    const rec = {sid:st.id, name:st.name, dni:st.dni, grade:st.grade, section:st.section, date:new Date().toISOString().split('T')[0], time:new Date().toLocaleTimeString(), type:'ENTRADA'};
-                    db.attendance.push(rec); saveLocal(); refreshAll();
-                    if(authed) await gapi.client.sheets.spreadsheets.values.append({spreadsheetId: SHEET_ID, range: 'Asistencia', valueInputOption: 'USER_ENTERED', resource: {values: [[rec.sid, rec.name, rec.dni, rec.grade, rec.section, rec.date, rec.time, rec.type]]}});
-                    alert('Asistencia: ' + st.name);
-                }
-            });
+        btn.classList.add('on'); document.getElementById('p-'+btn.dataset.p).classList.add('on');
+        
+        // Detener cámara si se sale de scanner
+        if(btn.dataset.p !== 'scanner' && qrScanner) { qrScanner.clear(); qrScanner = null; }
+        
+        // Iniciar cámara si entra en scanner
+        if(btn.dataset.p === 'scanner') {
+            qrScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+            qrScanner.render(onScanSuccess);
         }
     };
 });
