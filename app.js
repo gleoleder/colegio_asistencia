@@ -122,12 +122,20 @@ function handleSignout() {
 // ─── PERMISOS / ROLES ────────────────────────────────────────
 function checkUserPermission() {
     if (!APP.currentUser) return;
-    const email = APP.currentUser.email.toLowerCase();
-    const perm  = APP.db.permisos.find(p => p.email.toLowerCase() === email);
+    const email = APP.currentUser.email.toLowerCase().trim();
+
+    console.log('🔐 Verificando acceso para:', email);
+    console.log('📋 Permisos disponibles:', APP.db.permisos);
+
+    const perm = APP.db.permisos.find(p =>
+        (p.email || '').toLowerCase().trim() === email
+    );
 
     if (!perm) {
         // Sin permiso registrado — acceso denegado
-        showToast('bad', 'Acceso denegado', `${email} no tiene permisos en el sistema. Contacta al administrador.`);
+        const listaEmails = APP.db.permisos.map(p => p.email).join(', ') || '(lista vacía)';
+        console.warn(`❌ Acceso denegado. Email buscado: "${email}". Permisos en hoja: ${listaEmails}`);
+        showToast('bad', 'Acceso denegado', `"${email}" no tiene permisos. Verifica que el correo esté exactamente así en la hoja Permisos.`);
         handleSignout();
         return;
     }
@@ -247,7 +255,18 @@ function syncStatus(type, text) {
 function saveLocal() { localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(APP.db)); }
 function loadLocal() {
     const saved = localStorage.getItem(CONFIG.STORAGE_KEY);
-    if (saved) { APP.db = JSON.parse(saved); refreshAll(); }
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        // Los permisos NO se restauran desde localStorage para evitar
+        // que datos desactualizados bloqueen el acceso al sistema.
+        // Siempre se cargan frescos desde Google Sheets al iniciar sesión.
+        APP.db.students   = parsed.students   || [];
+        APP.db.attendance = parsed.attendance || [];
+        APP.db.courses    = parsed.courses    || [];
+        APP.db.schedules  = parsed.schedules  || [];
+        APP.db.permisos   = []; // siempre vacío hasta que cargue Sheets
+        refreshAll();
+    }
 }
 
 // ─── CARGA DESDE GOOGLE SHEETS ───────────────────────────────
@@ -291,7 +310,7 @@ async function loadFromSheets() {
                     description: r[4] || ''
                 }));
             }
-        } catch(e) {}
+        } catch(e) { console.warn('Error cargando Cursos:', e); }
 
         // Horarios
         try {
@@ -304,19 +323,26 @@ async function loadFromSheets() {
                     startTime: r[3], endTime: r[4], room: r[5] || ''
                 }));
             }
-        } catch(e) {}
+        } catch(e) { console.warn('Error cargando Horarios:', e); }
 
-        // Permisos
+        // ── PERMISOS — carga directa desde Sheets, ignorando localStorage ──
+        // Se limpia primero para evitar que datos viejos bloqueen el acceso
+        APP.db.permisos = [];
         try {
             const resPerms = await gapi.client.sheets.spreadsheets.values.get({
                 spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.PERMISOS
             });
             if (resPerms.result.values) {
-                APP.db.permisos = resPerms.result.values.map(r => ({
-                    email: r[0], nombre: r[1] || '', rol: r[2] || CONFIG.ROLES.VIEWER
-                }));
+                APP.db.permisos = resPerms.result.values
+                    .filter(r => r[0] && r[0].toString().trim() !== '') // ignorar filas vacías
+                    .map(r => ({
+                        email:  r[0].toString().trim().toLowerCase(),
+                        nombre: (r[1] || '').toString().trim(),
+                        rol:    (r[2] || CONFIG.ROLES.VIEWER).toString().trim().toUpperCase()
+                    }));
             }
-        } catch(e) {}
+            console.log('✅ Permisos cargados:', APP.db.permisos);
+        } catch(e) { console.error('❌ Error cargando Permisos:', e); }
 
         saveLocal();
         refreshAll();
