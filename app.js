@@ -139,40 +139,43 @@ function loadLocal() {
 
 // ─── GOOGLE API — INICIALIZACIÓN ─────────────────────────────
 function onGapiLoad() {
+    console.log('onGapiLoad disparado');
     gapi.load('client', async () => {
         try {
-            await gapi.client.init({
-                apiKey:        CONFIG.API_KEY,
-                discoveryDocs: [
-                    'https://sheets.googleapis.com/$discovery/rest?version=v4',
-                    'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
-                ]
-            });
+            // Solo inicializar con apiKey — sin discoveryDocs que bloquean
+            await gapi.client.init({ apiKey: CONFIG.API_KEY });
+            console.log('gapi.client listo');
             APP.gapiOk = true;
             checkReady();
         } catch(e) {
             console.error('Error iniciando GAPI:', e);
-            showLoginError('Error al cargar la API de Google. Recarga la página.');
+            // Si falla el init, igual marcar como ok para no bloquear
+            // Las llamadas se harán con fetch directo
+            APP.gapiOk = true;
+            checkReady();
         }
     });
 }
 
 function onGisLoad() {
+    console.log('onGisLoad disparado');
     try {
         APP.tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: CONFIG.CLIENT_ID,
             scope:     CONFIG.SCOPES,
-            callback:  '' // se asigna en handleAuth()
+            callback:  ''
         });
+        console.log('tokenClient listo');
         APP.gisOk = true;
         checkReady();
     } catch(e) {
         console.error('Error iniciando GIS:', e);
-        showLoginError('Error al cargar el sistema de login de Google. Recarga la página.');
+        showLoginError('Error al cargar el login de Google. Recarga la página.');
     }
 }
 
 function checkReady() {
+    console.log('checkReady → gapiOk:', APP.gapiOk, '| gisOk:', APP.gisOk);
     if (APP.gapiOk && APP.gisOk) {
         showLoginBtn();
     }
@@ -339,75 +342,55 @@ async function loadFromSheets() {
     try {
         // Estudiantes
         try {
-            const res = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.ESTUDIANTES
-            });
-            if (res.result.values) {
-                APP.db.students = res.result.values.map(r => ({
-                    id: r[0]||'', name: r[1]||'', dni: r[2]||'', email: r[3]||'',
-                    phone: r[4]||'', course: r[5]||'', schedule: r[6]||'',
-                    photoUrl: r[7]||'', qrUrl: r[8]||'', createdAt: r[9]||'',
-                    registeredBy: r[10]||''
-                }));
-            }
-        } catch(e) { console.warn('Error cargando Estudiantes:', e); }
+            const rows = await sheetsGet(CONFIG.RANGES.ESTUDIANTES);
+            APP.db.students = rows.map(r => ({
+                id: r[0]||'', name: r[1]||'', dni: r[2]||'', email: r[3]||'',
+                phone: r[4]||'', course: r[5]||'', schedule: r[6]||'',
+                photoUrl: r[7]||'', qrUrl: r[8]||'', createdAt: r[9]||'',
+                registeredBy: r[10]||''
+            }));
+        } catch(e) { console.warn('Estudiantes:', e); }
 
         // Asistencia
         try {
-            const res = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.ASISTENCIA
-            });
-            if (res.result.values) {
-                APP.db.attendance = res.result.values.map(r => ({
-                    sid: r[0]||'', name: r[1]||'', dni: r[2]||'', course: r[3]||'',
-                    schedule: r[4]||'', date: r[5]||'', time: r[6]||'',
-                    type: r[7]||'', registeredBy: r[8]||''
-                }));
-            }
-        } catch(e) { console.warn('Error cargando Asistencia:', e); }
+            const rows = await sheetsGet(CONFIG.RANGES.ASISTENCIA);
+            APP.db.attendance = rows.map(r => ({
+                sid: r[0]||'', name: r[1]||'', dni: r[2]||'', course: r[3]||'',
+                schedule: r[4]||'', date: r[5]||'', time: r[6]||'',
+                type: r[7]||'', registeredBy: r[8]||''
+            }));
+        } catch(e) { console.warn('Asistencia:', e); }
 
         // Cursos
         try {
-            const res = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.CURSOS
-            });
-            if (res.result.values) {
-                APP.db.courses = res.result.values.map(r => ({
-                    id: r[0]||'', name: r[1]||'', grade: r[2]||'',
-                    active: (r[3]||'SI').toUpperCase() === 'SI',
-                    description: r[4]||''
-                }));
-            }
-        } catch(e) { console.warn('Error cargando Cursos:', e); }
+            const rows = await sheetsGet(CONFIG.RANGES.CURSOS);
+            APP.db.courses = rows.map(r => ({
+                id: r[0]||'', name: r[1]||'', grade: r[2]||'',
+                active: (r[3]||'SI').toUpperCase() === 'SI',
+                description: r[4]||''
+            }));
+        } catch(e) { console.warn('Cursos:', e); }
 
         // Horarios
         try {
-            const res = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.HORARIOS
-            });
-            if (res.result.values) {
-                APP.db.schedules = res.result.values.map(r => ({
-                    courseId: r[0]||'', courseName: r[1]||'', day: r[2]||'',
-                    startTime: r[3]||'', endTime: r[4]||'', room: r[5]||''
-                }));
-            }
-        } catch(e) { console.warn('Error cargando Horarios:', e); }
+            const rows = await sheetsGet(CONFIG.RANGES.HORARIOS);
+            APP.db.schedules = rows.map(r => ({
+                courseId: r[0]||'', courseName: r[1]||'', day: r[2]||'',
+                startTime: r[3]||'', endTime: r[4]||'', room: r[5]||''
+            }));
+        } catch(e) { console.warn('Horarios:', e); }
 
-        // Permisos (recargar para tener la lista actualizada en la UI de gestión)
+        // Permisos (actualizar lista en memoria para la UI de gestión)
         try {
-            const res = await gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.PERMISOS
-            });
-            if (res.result.values) {
-                APP.db.permisos = res.result.values
-                    .filter(r => r[0] && r[0].toString().trim() !== '')
-                    .map(r => ({
-                        email:  r[0].toString().trim().toLowerCase(),
-                        nombre: (r[1]||'').toString().trim(),
-                        rol:    (r[2]||'VIEWER').toString().trim().toUpperCase()
-                    }));
-            }
-        } catch(e) { console.warn('Error recargando Permisos:', e); }
+            const rows = await sheetsGet(CONFIG.RANGES.PERMISOS);
+            APP.db.permisos = rows
+                .filter(r => r[0] && r[0].toString().trim() !== '')
+                .map(r => ({
+                    email:  r[0].toString().trim().toLowerCase(),
+                    nombre: (r[1]||'').toString().trim(),
+                    rol:    (r[2]||'VIEWER').toString().trim().toUpperCase()
+                }));
+        } catch(e) { console.warn('Permisos:', e); }
 
         saveLocal();
         syncStatus('ok', '✅ Sincronizado');
@@ -415,6 +398,55 @@ async function loadFromSheets() {
         console.error('Error general al cargar:', e);
         syncStatus('err', '❌ Error de conexión');
     }
+}
+
+// ─── SHEETS API — fetch directo (sin gapi.client.sheets) ─────
+function getToken() {
+    const t = gapi.client.getToken();
+    return t ? t.access_token : null;
+}
+
+async function sheetsGet(range) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}`;
+    const r     = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!r.ok) throw new Error(`sheetsGet ${range} → HTTP ${r.status}`);
+    return (await r.json()).values || [];
+}
+
+async function sheetsAppend(range, values) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED`;
+    const r     = await fetch(url, {
+        method:  'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ values })
+    });
+    if (!r.ok) throw new Error(`sheetsAppend ${range} → HTTP ${r.status}`);
+    return r.json();
+}
+
+async function sheetsClear(range) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}:clear`;
+    const r     = await fetch(url, {
+        method:  'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+    });
+    if (!r.ok) throw new Error(`sheetsClear ${range} → HTTP ${r.status}`);
+    return r.json();
+}
+
+async function sheetsUpdate(range, values) {
+    const token = getToken();
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`;
+    const r     = await fetch(url, {
+        method:  'PUT',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ values })
+    });
+    if (!r.ok) throw new Error(`sheetsUpdate ${range} → HTTP ${r.status}`);
+    return r.json();
 }
 
 // ─── SUBIR A DRIVE ───────────────────────────────────────────
@@ -539,16 +571,11 @@ async function doRegister(event) {
         const qrCanvas   = qrDiv.querySelector('canvas');
         student.qrUrl    = await uploadToDrive(`QR_${student.dni}.png`, qrCanvas.toDataURL(), 'image/png');
 
-        await gapi.client.sheets.spreadsheets.values.append({
-            spreadsheetId: CONFIG.SHEET_ID,
-            range:         CONFIG.SHEETS.ESTUDIANTES,
-            valueInputOption: 'USER_ENTERED',
-            resource: { values: [[
-                student.id, student.name, student.dni, student.email, student.phone,
-                student.course, student.schedule, student.photoUrl, student.qrUrl,
-                student.createdAt, student.registeredBy
-            ]]}
-        });
+        await sheetsAppend(CONFIG.SHEETS.ESTUDIANTES, [[
+            student.id, student.name, student.dni, student.email, student.phone,
+            student.course, student.schedule, student.photoUrl, student.qrUrl,
+            student.createdAt, student.registeredBy
+        ]]);
         showToast('ok', 'Registrado', `${student.name} registrado por ${student.registeredBy}`);
         document.getElementById('qrStatus').textContent = '✅ Registrado y sincronizado';
     } else {
@@ -595,15 +622,10 @@ async function onScanSuccess(decodedText) {
                 saveLocal();
 
                 if (APP.authed) {
-                    await gapi.client.sheets.spreadsheets.values.append({
-                        spreadsheetId: CONFIG.SHEET_ID,
-                        range:         CONFIG.SHEETS.ASISTENCIA,
-                        valueInputOption: 'USER_ENTERED',
-                        resource: { values: [[
-                            record.sid, record.name, record.dni, record.course,
-                            record.schedule, record.date, record.time, record.type, record.registeredBy
-                        ]]}
-                    });
+                    await sheetsAppend(CONFIG.SHEETS.ASISTENCIA, [[
+                        record.sid, record.name, record.dni, record.course,
+                        record.schedule, record.date, record.time, record.type, record.registeredBy
+                    ]]);
                 }
 
                 const modeLabel = mode === 'ENTRADA' ? '🟢 Entrada' : '🔴 Salida';
@@ -657,12 +679,7 @@ async function addPermiso(event) {
     saveLocal();
 
     try {
-        await gapi.client.sheets.spreadsheets.values.append({
-            spreadsheetId: CONFIG.SHEET_ID,
-            range:         CONFIG.SHEETS.PERMISOS,
-            valueInputOption: 'USER_ENTERED',
-            resource: { values: [[email, nombre, rol]] }
-        });
+        await sheetsAppend(CONFIG.SHEETS.PERMISOS, [[email, nombre, rol]]);
         showToast('ok', 'Permiso agregado', `${email} — ${rol}`);
     } catch(e) {
         showToast('warn', 'Solo guardado local', 'No se pudo sincronizar con Sheets.');
@@ -678,16 +695,9 @@ async function deletePermiso(email) {
     renderPermisos();
     showToast('ok', 'Permiso eliminado', email);
     try {
-        await gapi.client.sheets.spreadsheets.values.clear({
-            spreadsheetId: CONFIG.SHEET_ID, range: CONFIG.RANGES.PERMISOS
-        });
+        await sheetsClear(CONFIG.RANGES.PERMISOS);
         if (APP.db.permisos.length) {
-            await gapi.client.sheets.spreadsheets.values.update({
-                spreadsheetId: CONFIG.SHEET_ID,
-                range:         'Permisos!A2',
-                valueInputOption: 'USER_ENTERED',
-                resource: { values: APP.db.permisos.map(p => [p.email, p.nombre, p.rol]) }
-            });
+            await sheetsUpdate('Permisos!A2', APP.db.permisos.map(p => [p.email, p.nombre, p.rol]));
         }
     } catch(e) { console.warn('Error sincronizando eliminación de permiso:', e); }
 }
