@@ -4,77 +4,63 @@
 // ============================================================
 
 const CONFIG = {
-    // --- Google API ---
     CLIENT_ID: '814005655098-8csk41qts3okv4b2fjnq7ls4qc2kq0vc.apps.googleusercontent.com',
     API_KEY: 'AIzaSyAOhGTjJXHhuUhqf1g2DPCla59xNzftb-Q',
     SHEET_ID: '1m0rv2gcMW3E8Yrh02PnwtHgZ3utj8XRPa9kYpwwm5oo',
     FOLDER_ID: '1ig8n3pthz8esYzmAsoibPUPz1MNVg88m',
     SCOPES: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file',
 
-    // --- Hojas de cálculo (nombres de pestañas) ---
     SHEETS: {
         ESTUDIANTES: 'Estudiantes',
-        ASISTENCIA: 'Asistencia',
-        CURSOS: 'Cursos',
-        HORARIOS: 'Horarios'
+        ASISTENCIA:  'Asistencia',
+        CURSOS:      'Cursos',
+        HORARIOS:    'Horarios',
+        PERMISOS:    'Permisos'
     },
 
-    // --- Rangos de lectura ---
     RANGES: {
-        ESTUDIANTES: 'Estudiantes!A2:H',
-        ASISTENCIA: 'Asistencia!A2:H',
-        CURSOS: 'Cursos!A2:E',
-        HORARIOS: 'Horarios!A2:F'
+        ESTUDIANTES: 'Estudiantes!A2:J',
+        ASISTENCIA:  'Asistencia!A2:I',
+        CURSOS:      'Cursos!A2:E',
+        HORARIOS:    'Horarios!A2:F',
+        PERMISOS:    'Permisos!A2:C'
     },
 
-    // --- Almacenamiento local ---
-    STORAGE_KEY: 'san_agustin_v3',
+    STORAGE_KEY: 'cean_v4',
 
-    // --- Escáner QR ---
-    SCANNER: {
-        FPS: 10,
-        QR_BOX: 220,
-        PAUSE_MS: 3000
-    },
+    SCANNER: { FPS: 10, QR_BOX: 220, PAUSE_MS: 3500 },
+    PHOTO:   { WIDTH: 200, HEIGHT: 200, QUALITY: 0.85 },
 
-    // --- Foto de perfil ---
-    PHOTO: {
-        WIDTH: 200,
-        HEIGHT: 200,
-        QUALITY: 0.8
-    },
-
-    // --- Instituto ---
     SCHOOL: {
-        NAME: 'Instituto CEAN',
-        SHORT: 'CEAN',
+        NAME:     'Instituto CEAN',
+        SHORT:    'CEAN',
         SUBTITLE: 'Sistema de Asistencia'
     },
 
-    // --- Grados/Paralelos (se cargan desde la hoja) ---
-    GRADOS: [],
-    SECCIONES: [],
+    TIPOS: { ENTRADA: 'ENTRADA', SALIDA: 'SALIDA' },
 
-    // --- Tipos de asistencia ---
-    TIPOS: {
-        ENTRADA: 'ENTRADA',
-        SALIDA: 'SALIDA'
+    ROLES: {
+        ADMIN:    'ADMIN',
+        REGISTRO: 'REGISTRO',
+        SCANNER:  'SCANNER',
+        VIEWER:   'VIEWER'
     }
 };
 
-// Estado global de la aplicación
 const APP = {
-    tokenClient: null,
-    gapiOk: false,
-    gisOk: false,
-    authed: false,
-    qrScanner: null,
+    tokenClient:  null,
+    gapiOk:       false,
+    gisOk:        false,
+    authed:       false,
+    currentUser:  null,
+    qrScanner:    null,
     currentPhoto: null,
-    lastStudent: null,
+    lastStudent:  null,
     db: {
-        students: [],
+        students:   [],
         attendance: [],
-        courses: [],
-        schedules: []
+        courses:    [],
+        schedules:  [],
+        permisos:   []
     }
 };
